@@ -19,8 +19,21 @@ var (
 func main() {
 	redisAddr := flag.String("redis", "localhost:6379", "Redis address")
 	logLevel := flag.String("log-level", "info", "Log level: debug, info, warn, error")
+	alarmDuration := flag.Int("alarm-duration", 10, "Alarm duration in seconds")
+	hornEnabled := flag.Bool("horn-enabled", false, "Enable horn during alarm")
 	version := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
+
+	hornFlagSet := false
+	durationFlagSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "horn-enabled" {
+			hornFlagSet = true
+		}
+		if f.Name == "alarm-duration" {
+			durationFlagSet = true
+		}
+	})
 
 	if *version {
 		println("alarm-service")
@@ -39,11 +52,17 @@ func main() {
 		"revision", gitRevision,
 		"build_time", buildTime,
 		"redis", *redisAddr,
-		"log_level", *logLevel)
+		"log_level", *logLevel,
+		"alarm_duration", *alarmDuration,
+		"horn_enabled", *hornEnabled)
 
 	application := app.New(&app.Config{
-		RedisAddr: *redisAddr,
-		Logger:    logger,
+		RedisAddr:        *redisAddr,
+		Logger:           logger,
+		AlarmDuration:    *alarmDuration,
+		DurationFlagSet:  durationFlagSet,
+		HornEnabled:      *hornEnabled,
+		HornFlagSet:      hornFlagSet,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

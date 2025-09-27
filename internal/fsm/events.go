@@ -17,6 +17,20 @@ type AlarmModeChangedEvent struct {
 
 func (e AlarmModeChangedEvent) Type() string { return "alarm_mode_changed" }
 
+// HornSettingChangedEvent signals horn setting changed
+type HornSettingChangedEvent struct {
+	Enabled bool
+}
+
+func (e HornSettingChangedEvent) Type() string { return "horn_setting_changed" }
+
+// AlarmDurationChangedEvent signals alarm duration changed
+type AlarmDurationChangedEvent struct {
+	Duration int
+}
+
+func (e AlarmDurationChangedEvent) Type() string { return "alarm_duration_changed" }
+
 // VehicleStateChangedEvent signals vehicle state change
 type VehicleStateChangedEvent struct {
 	State VehicleState

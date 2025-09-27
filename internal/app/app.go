@@ -14,8 +14,12 @@ import (
 
 // Config holds application configuration
 type Config struct {
-	RedisAddr string
-	Logger    *slog.Logger
+	RedisAddr       string
+	Logger          *slog.Logger
+	AlarmDuration   int
+	DurationFlagSet bool
+	HornEnabled     bool
+	HornFlagSet     bool
 }
 
 // App represents the alarm-service application
@@ -58,7 +62,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	defer a.bmxClient.Close()
 
-	a.alarmController, err = alarm.NewController(a.cfg.RedisAddr, a.log)
+	a.alarmController, err = alarm.NewController(a.cfg.RedisAddr, a.cfg.HornEnabled, a.log)
 	if err != nil {
 		return fmt.Errorf("create alarm controller: %w", err)
 	}
@@ -75,16 +79,42 @@ func (a *App) Run(ctx context.Context) error {
 		a.publisher,
 		a.inhibitor,
 		a.alarmController,
+		a.cfg.AlarmDuration,
 		a.log,
 	)
 
 	a.subscriber = redis.NewSubscriber(a.redis, a.stateMachine, a.log)
 
+	if a.cfg.HornFlagSet {
+		a.log.Info("horn flag set, writing to Redis", "enabled", a.cfg.HornEnabled)
+		hornValue := "false"
+		if a.cfg.HornEnabled {
+			hornValue = "true"
+		}
+		if err := a.redis.HSet(ctx, "settings", "alarm.honk", hornValue); err != nil {
+			a.log.Error("failed to write alarm.honk to Redis", "error", err)
+		}
+		if err := a.redis.Publish(ctx, "settings", "alarm.honk"); err != nil {
+			a.log.Error("failed to publish alarm.honk change", "error", err)
+		}
+	}
+
+	if a.cfg.DurationFlagSet {
+		a.log.Info("duration flag set, writing to Redis", "duration", a.cfg.AlarmDuration)
+		durationValue := fmt.Sprintf("%d", a.cfg.AlarmDuration)
+		if err := a.redis.HSet(ctx, "settings", "alarm.duration", durationValue); err != nil {
+			a.log.Error("failed to write alarm.duration to Redis", "error", err)
+		}
+		if err := a.redis.Publish(ctx, "settings", "alarm.duration"); err != nil {
+			a.log.Error("failed to publish alarm.duration change", "error", err)
+		}
+	}
+
 	a.subscriber.CheckInitialState(ctx)
 
 	go a.stateMachine.Run(ctx)
 	go a.subscriber.SubscribeToVehicleState(ctx)
-	go a.subscriber.SubscribeToAlarmMode(ctx)
+	go a.subscriber.SubscribeToAlarmSettings(ctx)
 	go a.subscriber.SubscribeToBMXInterrupt(ctx)
 	go a.alarmController.ListenForCommands(ctx)
 

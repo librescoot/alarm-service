@@ -97,6 +97,7 @@ type StateMachine struct {
 	vehicleStandby bool
 	level2Cycles   int
 	requestDisarm  bool
+	alarmDuration  int
 }
 
 // BMXClient interface for BMX commands
@@ -123,6 +124,7 @@ type SuspendInhibitor interface {
 type AlarmController interface {
 	Start(duration time.Duration) error
 	Stop() error
+	SetHornEnabled(enabled bool)
 }
 
 // New creates a new StateMachine
@@ -131,6 +133,7 @@ func New(
 	pub StatusPublisher,
 	inh SuspendInhibitor,
 	alarm AlarmController,
+	alarmDuration int,
 	log *slog.Logger,
 ) *StateMachine {
 	return &StateMachine{
@@ -146,6 +149,7 @@ func New(
 		vehicleStandby:  false,
 		level2Cycles:    0,
 		requestDisarm:   false,
+		alarmDuration:   alarmDuration,
 	}
 }
 
@@ -186,6 +190,17 @@ func (sm *StateMachine) State() State {
 func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+
+	if e, ok := event.(HornSettingChangedEvent); ok {
+		sm.alarmController.SetHornEnabled(e.Enabled)
+		return
+	}
+
+	if e, ok := event.(AlarmDurationChangedEvent); ok {
+		sm.alarmDuration = e.Duration
+		sm.log.Info("alarm duration updated", "duration", e.Duration)
+		return
+	}
 
 	oldState := sm.state
 	sm.log.Debug("handling event",

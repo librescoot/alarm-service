@@ -35,21 +35,38 @@ make build-amd64    # AMD64 binary
 ## Usage
 
 ```bash
-alarm-service --redis=localhost:6379
+alarm-service [flags]
+
+Flags:
+  --redis=localhost:6379    Redis address
+  --log-level=info          Log level (debug, info, warn, error)
+  --alarm-duration=10       Alarm duration in seconds
+  --horn-enabled=false      Enable horn during alarm (overrides Redis setting)
+  --version                 Print version and exit
 ```
+
+### Configuration Override
+
+- If `--horn-enabled` flag is explicitly set, it writes to Redis (`settings alarm.honk`) and overrides any existing value
+- If flag is not set, the service reads from Redis
+- This allows both persistent configuration via Redis and temporary overrides via CLI
 
 ## Redis Interface
 
-### Subscriptions
+### Settings Keys
 
-- `vehicle:state` - Vehicle state changes (standby, moving, etc.)
-- `settings:alarm-mode` - Alarm enable/disable
+- `HGET settings alarm.enabled` - Alarm enabled (true/false)
+- `HGET settings alarm.honk` - Horn enabled during alarm (true/false)
+
+### Subscribed Channels
+
+- `vehicle` - Vehicle state changes (payload: "state")
+- `settings` - Settings changes (payload: "alarm.enabled" or "alarm.honk")
 - `bmx:interrupt` - Motion detection from bmx-service
-- `scooter:alarm` - Manual alarm commands
 
-### Publications
+### Published Status
 
-- `alarm` hash + channel - Current alarm status
+- `HGET alarm status` - Current alarm status (disabled, disarmed, armed, level-1-triggered, level-2-triggered)
 
 ### Commands Sent
 
@@ -57,10 +74,16 @@ alarm-service --redis=localhost:6379
 - `scooter:horn` - Horn control (on/off pattern)
 - `scooter:blinker` - Hazard light control (both/off)
 
-## Manual Alarm Control
+## Alarm Control
 
 ```bash
-# Start alarm for 30 seconds
+# Enable alarm system
+redis-cli LPUSH scooter:alarm enable
+
+# Disable alarm system
+redis-cli LPUSH scooter:alarm disable
+
+# Start alarm for 30 seconds (manual trigger)
 redis-cli LPUSH scooter:alarm start:30
 
 # Stop alarm immediately
@@ -71,16 +94,25 @@ redis-cli LPUSH scooter:alarm stop
 
 ```bash
 # Enable alarm
-redis-cli -h 10.7.0.4 HSET settings alarm-mode enabled
+redis-cli HSET settings alarm.enabled true
+redis-cli publish settings alarm.enabled
 
-# Set vehicle to standby
-redis-cli -h 10.7.0.4 PUBLISH vehicle:state standby
+# Enable horn
+redis-cli HSET settings alarm.honk true
+redis-cli publish settings alarm.honk
+
+# Set vehicle to standby (triggers arming)
+redis-cli HSET vehicle state stand-by
+redis-cli publish vehicle state
 
 # Monitor alarm status
-redis-cli -h 10.7.0.4 SUBSCRIBE alarm
+redis-cli SUBSCRIBE alarm
 
-# Test manual alarm
-redis-cli -h 10.7.0.4 LPUSH scooter:alarm start:10
+# Test manual alarm trigger
+redis-cli LPUSH scooter:alarm start:10
+
+# Or use command to enable/disable
+redis-cli LPUSH scooter:alarm enable
 ```
 
 ## State-Specific Behavior

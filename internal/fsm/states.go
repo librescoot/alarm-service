@@ -149,7 +149,7 @@ func (sm *StateMachine) onEnterTriggerLevel2(ctx context.Context) {
 		sm.log.Error("failed to soft reset", "error", err)
 	}
 
-	sm.alarmController.Start(10 * time.Second)
+	sm.alarmController.Start(time.Duration(sm.alarmDuration) * time.Second)
 
 	sm.startTimer("level2_check", 50*time.Second, func() {
 		sm.SendEvent(Level2CheckTimerEvent{})
@@ -170,7 +170,7 @@ func (sm *StateMachine) onEnterWaitingMovement(ctx context.Context) {
 		sm.log.Error("failed to soft reset", "error", err)
 	}
 
-	sm.alarmController.Start(10 * time.Second)
+	sm.alarmController.Start(time.Duration(sm.alarmDuration) * time.Second)
 
 	sm.startTimer("chip_setup", 47*time.Second, func() {
 		sm.configureBMX(context.Background(), InterruptPinNone, SensitivityHigh)

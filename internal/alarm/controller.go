@@ -12,16 +12,17 @@ import (
 
 // Controller manages alarm activation (horn + hazard lights)
 type Controller struct {
-	redis  *redis.Client
-	ctx    context.Context
-	cancel context.CancelFunc
-	log    *slog.Logger
-	mu     sync.Mutex
-	active bool
+	redis       *redis.Client
+	ctx         context.Context
+	cancel      context.CancelFunc
+	log         *slog.Logger
+	mu          sync.Mutex
+	active      bool
+	hornEnabled bool
 }
 
 // NewController creates a new alarm controller
-func NewController(redisAddr string, log *slog.Logger) (*Controller, error) {
+func NewController(redisAddr string, hornEnabled bool, log *slog.Logger) (*Controller, error) {
 	rdb := redis.NewClient(&redis.Options{
 		Addr: redisAddr,
 		DB:   0,
@@ -33,10 +34,11 @@ func NewController(redisAddr string, log *slog.Logger) (*Controller, error) {
 	}
 
 	return &Controller{
-		redis:  rdb,
-		ctx:    ctx,
-		log:    log,
-		active: false,
+		redis:       rdb,
+		ctx:         ctx,
+		log:         log,
+		active:      false,
+		hornEnabled: hornEnabled,
 	}, nil
 }
 
@@ -44,6 +46,14 @@ func NewController(redisAddr string, log *slog.Logger) (*Controller, error) {
 func (c *Controller) Close() error {
 	c.Stop()
 	return c.redis.Close()
+}
+
+// SetHornEnabled updates the horn enabled setting
+func (c *Controller) SetHornEnabled(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.hornEnabled = enabled
+	c.log.Info("horn setting updated", "enabled", enabled)
 }
 
 // Start starts the alarm for the specified duration
@@ -94,8 +104,9 @@ func (c *Controller) stopUnsafe() error {
 	}
 
 	ctx := context.Background()
-	// Horn disabled for testing
-	// c.redis.LPush(ctx, "scooter:horn", "off")
+	if c.hornEnabled {
+		c.redis.LPush(ctx, "scooter:horn", "off")
+	}
 	c.redis.LPush(ctx, "scooter:blinker", "off")
 
 	c.redis.HSet(ctx, "alarm", "alarm-active", "false")
@@ -127,12 +138,13 @@ func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration)
 			return
 
 		case <-ticker.C:
-			// Horn disabled for testing - only hazard lights active
-			// if hornOn {
-			// 	c.redis.LPush(ctx, "scooter:horn", "on")
-			// } else {
-			// 	c.redis.LPush(ctx, "scooter:horn", "off")
-			// }
+			if c.hornEnabled {
+				if hornOn {
+					c.redis.LPush(ctx, "scooter:horn", "on")
+				} else {
+					c.redis.LPush(ctx, "scooter:horn", "off")
+				}
+			}
 			hornOn = !hornOn
 		}
 	}
@@ -168,8 +180,21 @@ func (c *Controller) ListenForCommands(ctx context.Context) {
 
 // handleCommand handles a command string
 func (c *Controller) handleCommand(cmd string) {
-	if cmd == "stop" {
+	ctx := context.Background()
+
+	switch cmd {
+	case "stop":
 		c.Stop()
+		return
+	case "enable":
+		c.redis.HSet(ctx, "settings", "alarm.enabled", "true")
+		c.redis.Publish(ctx, "settings", "alarm.enabled")
+		c.log.Info("alarm enabled via command")
+		return
+	case "disable":
+		c.redis.HSet(ctx, "settings", "alarm.enabled", "false")
+		c.redis.Publish(ctx, "settings", "alarm.enabled")
+		c.log.Info("alarm disabled via command")
 		return
 	}
 

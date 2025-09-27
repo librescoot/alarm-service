@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"alarm-service/internal/fsm"
@@ -56,9 +57,9 @@ func (s *Subscriber) SubscribeToVehicleState(ctx context.Context) {
 	}
 }
 
-// SubscribeToAlarmMode subscribes to alarm mode changes
-func (s *Subscriber) SubscribeToAlarmMode(ctx context.Context) {
-	s.log.Info("subscribing to alarm mode")
+// SubscribeToAlarmSettings subscribes to alarm settings changes
+func (s *Subscriber) SubscribeToAlarmSettings(ctx context.Context) {
+	s.log.Info("subscribing to alarm settings")
 
 	pubsub := s.client.Subscribe(ctx, "settings")
 	defer pubsub.Close()
@@ -75,15 +76,41 @@ func (s *Subscriber) SubscribeToAlarmMode(ctx context.Context) {
 				continue
 			}
 
-			if msg.Payload == "alarm-mode" {
-				alarmMode, err := s.client.HGet(ctx, "settings", "alarm-mode")
+			if msg.Payload == "alarm.enabled" {
+				alarmEnabled, err := s.client.HGet(ctx, "settings", "alarm.enabled")
 				if err != nil {
-					s.log.Error("failed to get alarm mode from redis", "error", err)
+					s.log.Error("failed to get alarm.enabled from redis", "error", err)
 					continue
 				}
-				enabled := alarmMode == "enabled"
-				s.log.Debug("alarm mode changed", "enabled", enabled)
+				enabled := alarmEnabled == "true"
+				s.log.Debug("alarm enabled changed", "enabled", enabled)
 				s.sm.SendEvent(fsm.AlarmModeChangedEvent{Enabled: enabled})
+			}
+
+			if msg.Payload == "alarm.honk" {
+				hornEnabled, err := s.client.HGet(ctx, "settings", "alarm.honk")
+				if err != nil {
+					s.log.Error("failed to get alarm.honk from redis", "error", err)
+					continue
+				}
+				enabled := hornEnabled == "true"
+				s.log.Debug("alarm honk changed", "enabled", enabled)
+				s.sm.SendEvent(fsm.HornSettingChangedEvent{Enabled: enabled})
+			}
+
+			if msg.Payload == "alarm.duration" {
+				durationStr, err := s.client.HGet(ctx, "settings", "alarm.duration")
+				if err != nil {
+					s.log.Error("failed to get alarm.duration from redis", "error", err)
+					continue
+				}
+				var duration int
+				if _, err := fmt.Sscanf(durationStr, "%d", &duration); err != nil {
+					s.log.Error("invalid alarm.duration value", "value", durationStr, "error", err)
+					continue
+				}
+				s.log.Debug("alarm duration changed", "duration", duration)
+				s.sm.SendEvent(fsm.AlarmDurationChangedEvent{Duration: duration})
 			}
 		}
 	}
@@ -126,11 +153,27 @@ func (s *Subscriber) CheckInitialState(ctx context.Context) {
 		s.sm.SendEvent(fsm.VehicleStateChangedEvent{State: state})
 	}
 
-	alarmMode, err := s.client.HGet(ctx, "settings", "alarm-mode")
+	alarmEnabled, err := s.client.HGet(ctx, "settings", "alarm.enabled")
 	if err == nil {
-		enabled := alarmMode == "enabled"
-		s.log.Info("initial alarm mode", "enabled", enabled)
+		enabled := alarmEnabled == "true"
+		s.log.Info("initial alarm enabled", "enabled", enabled)
 		s.sm.SendEvent(fsm.AlarmModeChangedEvent{Enabled: enabled})
+	}
+
+	hornEnabled, err := s.client.HGet(ctx, "settings", "alarm.honk")
+	if err == nil {
+		enabled := hornEnabled == "true"
+		s.log.Info("initial horn enabled", "enabled", enabled)
+		s.sm.SendEvent(fsm.HornSettingChangedEvent{Enabled: enabled})
+	}
+
+	alarmDuration, err := s.client.HGet(ctx, "settings", "alarm.duration")
+	if err == nil {
+		var duration int
+		if _, err := fmt.Sscanf(alarmDuration, "%d", &duration); err == nil {
+			s.log.Info("initial alarm duration", "duration", duration)
+			s.sm.SendEvent(fsm.AlarmDurationChangedEvent{Duration: duration})
+		}
 	}
 
 	bmxInitialized, err := s.client.HGet(ctx, "bmx", "initialized")
