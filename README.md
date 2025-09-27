@@ -5,12 +5,22 @@ Alarm state machine service for LibreScoot motion-based alarm system.
 ## Features
 
 - 8-state finite state machine for alarm logic
-- Integration with bmx-service for motion detection
+- **Integrated BMX055 hardware control** (no separate bmx-service required)
+- Direct I2C communication with accelerometer and gyroscope
 - Multi-level triggering (Level 1: notification, Level 2: alarm with horn + hazards)
 - Automatic BMX configuration based on alarm state
 - Suspend inhibitor management (wake locks)
 - Horn pattern: 400ms on/off alternating
 - Hazard lights: continuous during alarm
+
+## Architecture
+
+The service directly controls the BMX055 motion sensor via I2C:
+- **Accelerometer (0x18)**: Slow/no-motion interrupt detection
+- **Gyroscope (0x68)**: Rotation detection for interrupt validation
+- **Interrupt Poller**: 100ms polling loop monitoring accelerometer interrupt status
+
+BMX interrupts are published to Redis `bmx:interrupt` channel for state machine processing.
 
 ## State Machine
 
@@ -38,6 +48,7 @@ make build-amd64    # AMD64 binary
 alarm-service [flags]
 
 Flags:
+  --i2c-bus=/dev/i2c-3      I2C bus device path for BMX055
   --redis=localhost:6379    Redis address
   --log-level=info          Log level (debug, info, warn, error)
   --alarm-duration=10       Alarm duration in seconds

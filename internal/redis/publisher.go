@@ -29,3 +29,11 @@ func (p *Publisher) PublishStatus(ctx context.Context, status string) error {
 
 	return nil
 }
+
+// PublishInterrupt publishes a BMX interrupt event
+func (p *Publisher) PublishInterrupt(ctx context.Context, payload string) error {
+	if err := p.client.Publish(ctx, "bmx:interrupt", payload); err != nil {
+		return fmt.Errorf("failed to publish bmx interrupt: %w", err)
+	}
+	return nil
+}

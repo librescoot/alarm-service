@@ -1,11 +1,12 @@
 [Unit]
 Description=LibreScoot Alarm Service
-After=network.target redis.service bmx-service.service
-Wants=redis.service bmx-service.service
+After=network.target redis.service
+Wants=redis.service
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/alarm-service \
+    --i2c-bus=/dev/i2c-3 \
     --redis=localhost:6379 \
     --log-level=info \
     --alarm-duration=10
