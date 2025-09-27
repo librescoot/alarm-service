@@ -17,6 +17,7 @@ var (
 )
 
 func main() {
+	i2cBus := flag.String("i2c-bus", "/dev/i2c-3", "I2C bus device path")
 	redisAddr := flag.String("redis", "localhost:6379", "Redis address")
 	logLevel := flag.String("log-level", "info", "Log level: debug, info, warn, error")
 	alarmDuration := flag.Int("alarm-duration", 10, "Alarm duration in seconds")
@@ -51,12 +52,14 @@ func main() {
 	logger.Info("alarm-service starting",
 		"revision", gitRevision,
 		"build_time", buildTime,
+		"i2c_bus", *i2cBus,
 		"redis", *redisAddr,
 		"log_level", *logLevel,
 		"alarm_duration", *alarmDuration,
 		"horn_enabled", *hornEnabled)
 
 	application := app.New(&app.Config{
+		I2CBus:           *i2cBus,
 		RedisAddr:        *redisAddr,
 		Logger:           logger,
 		AlarmDuration:    *alarmDuration,
