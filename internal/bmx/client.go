@@ -10,7 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Client is a client for sending commands to bmx-service
+// Client is a legacy compatibility layer for Redis-based BMX commands
 type Client struct {
 	redis *redis.Client
 	log   *slog.Logger

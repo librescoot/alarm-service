@@ -73,7 +73,7 @@ Flags:
 
 - `vehicle` - Vehicle state changes (payload: "state")
 - `settings` - Settings changes (payload: "alarm.enabled" or "alarm.honk")
-- `bmx:interrupt` - Motion detection from bmx-service
+- `bmx:interrupt` - Motion detection from integrated BMX055 hardware
 
 ### Published Status
 
