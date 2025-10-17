@@ -134,3 +134,9 @@ redis-cli LPUSH scooter:alarm enable
 | delay_armed | Yes | LOW | INT2 |
 | trigger_level_1 | Yes | MEDIUM | NONE |
 | trigger_level_2 | Yes | HIGH | NONE |
+
+## License
+
+This project is licensed under the [Creative Commons Attribution-NonCommercial 4.0 International License](LICENSE).
+
+Non-commercial use only. Commercial use is prohibited.
