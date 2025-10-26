@@ -107,6 +107,11 @@ func (sm *StateMachine) onEnterTriggerLevel1Wait(ctx context.Context) {
 		sm.log.Error("failed to soft reset", "error", err)
 	}
 
+	// Blink hazards once when L1 is first triggered
+	if err := sm.alarmController.BlinkHazards(); err != nil {
+		sm.log.Error("failed to blink hazards", "error", err)
+	}
+
 	sm.startTimer("level1_cooldown", 15*time.Second, func() {
 		sm.SendEvent(Level1CooldownTimerEvent{})
 	})

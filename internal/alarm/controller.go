@@ -178,6 +178,30 @@ func (c *Controller) ListenForCommands(ctx context.Context) {
 	}
 }
 
+// BlinkHazards briefly flashes the hazard lights once (one blink cycle = 800ms)
+func (c *Controller) BlinkHazards() error {
+	c.log.Info("blinking hazards")
+
+	ctx := context.Background()
+
+	// Turn on hazards
+	if err := c.redis.LPush(ctx, "scooter:blinker", "both").Err(); err != nil {
+		c.log.Error("failed to activate hazard lights", "error", err)
+		return err
+	}
+
+	// Wait for one blink cycle
+	time.Sleep(800 * time.Millisecond)
+
+	// Turn off hazards
+	if err := c.redis.LPush(ctx, "scooter:blinker", "off").Err(); err != nil {
+		c.log.Error("failed to deactivate hazard lights", "error", err)
+		return err
+	}
+
+	return nil
+}
+
 // handleCommand handles a command string
 func (c *Controller) handleCommand(cmd string) {
 	ctx := context.Background()

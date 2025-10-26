@@ -125,6 +125,7 @@ type AlarmController interface {
 	Start(duration time.Duration) error
 	Stop() error
 	SetHornEnabled(enabled bool)
+	BlinkHazards() error
 }
 
 // New creates a new StateMachine
@@ -210,6 +211,16 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 	newState := sm.getTransition(event)
 
 	if newState != oldState {
+		// Blink hazards when movement detected during L1 (before L2 activation)
+		if oldState == StateTriggerLevel1 && newState == StateTriggerLevel2 {
+			if _, ok := event.(BMXInterruptEvent); ok {
+				sm.log.Info("movement detected during L1, blinking hazards")
+				if err := sm.alarmController.BlinkHazards(); err != nil {
+					sm.log.Error("failed to blink hazards", "error", err)
+				}
+			}
+		}
+
 		sm.exitState(ctx, oldState)
 		sm.state = newState
 		sm.log.Info("state transition",
