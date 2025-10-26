@@ -84,6 +84,17 @@ func (s *Subscriber) SubscribeToAlarmSettings(ctx context.Context) {
 				}
 				enabled := alarmEnabled == "true"
 				s.log.Debug("alarm enabled changed", "enabled", enabled)
+
+				// When enabling alarm, check current vehicle state first
+				if enabled {
+					vehicleState, err := s.client.HGet(ctx, "vehicle", "state")
+					if err == nil {
+						state := fsm.ParseVehicleState(vehicleState)
+						s.log.Debug("sending current vehicle state before alarm enable", "state", state.String())
+						s.sm.SendEvent(fsm.VehicleStateChangedEvent{State: state})
+					}
+				}
+
 				s.sm.SendEvent(fsm.AlarmModeChangedEvent{Enabled: enabled})
 			}
 
