@@ -10,19 +10,27 @@ import (
 	"alarm-service/internal/hardware/bmx"
 )
 
+// InterruptPoller interface for enabling/disabling interrupt polling
+type InterruptPoller interface {
+	Enable()
+	Disable()
+}
+
 // HardwareController controls the BMX055 hardware directly
 type HardwareController struct {
-	accel *bmx.Accelerometer
-	gyro  *bmx.Gyroscope
-	log   *slog.Logger
+	accel  *bmx.Accelerometer
+	gyro   *bmx.Gyroscope
+	poller InterruptPoller
+	log    *slog.Logger
 }
 
 // NewHardwareController creates a new hardware controller
-func NewHardwareController(accel *bmx.Accelerometer, gyro *bmx.Gyroscope, log *slog.Logger) *HardwareController {
+func NewHardwareController(accel *bmx.Accelerometer, gyro *bmx.Gyroscope, poller InterruptPoller, log *slog.Logger) *HardwareController {
 	return &HardwareController{
-		accel: accel,
-		gyro:  gyro,
-		log:   log,
+		accel:  accel,
+		gyro:   gyro,
+		poller: poller,
+		log:    log,
 	}
 }
 
@@ -87,6 +95,8 @@ func (c *HardwareController) EnableInterrupt(ctx context.Context) error {
 		return fmt.Errorf("failed to enable interrupt: %w", err)
 	}
 
+	c.poller.Enable()
+
 	return nil
 }
 
@@ -97,6 +107,8 @@ func (c *HardwareController) DisableInterrupt(ctx context.Context) error {
 	if err := c.accel.DisableSlowNoMotionInterrupt(); err != nil {
 		return fmt.Errorf("failed to disable interrupt: %w", err)
 	}
+
+	c.poller.Disable()
 
 	return nil
 }

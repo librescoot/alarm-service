@@ -74,10 +74,10 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	defer a.closeBMXHardware()
 
-	a.bmxController = bmx.NewHardwareController(a.accel, a.gyro, a.log)
-
 	a.interruptPoller = hardware.NewInterruptPoller(a.accel, a.gyro, a.publisher, a.log)
 	go a.interruptPoller.Run(ctx)
+
+	a.bmxController = bmx.NewHardwareController(a.accel, a.gyro, a.interruptPoller, a.log)
 
 	var err error
 	a.alarmController, err = alarm.NewController(a.cfg.RedisAddr, a.cfg.HornEnabled, a.log)
