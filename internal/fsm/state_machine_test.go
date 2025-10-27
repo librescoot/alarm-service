@@ -10,10 +10,10 @@ import (
 
 // Mock implementations for testing
 type mockBMXClient struct {
-	sensitivity     Sensitivity
-	interruptPin    InterruptPin
-	interruptEnabled bool
-	resetCalled     int
+	sensitivity       Sensitivity
+	interruptPin      InterruptPin
+	interruptEnabled  bool
+	resetCalled       int
 }
 
 func (m *mockBMXClient) SetSensitivity(ctx context.Context, sens Sensitivity) error {

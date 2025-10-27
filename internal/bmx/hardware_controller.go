@@ -10,6 +10,22 @@ import (
 	"alarm-service/internal/hardware/bmx"
 )
 
+// Accelerometer interface for testing
+type Accelerometer interface {
+	ConfigureSlowNoMotion(threshold, duration byte) error
+	DisableInterruptMapping() error
+	ConfigureInterruptPin(useInt2, latched bool) error
+	MapInterruptToPin(useInt2 bool) error
+	SoftReset() error
+	EnableSlowNoMotionInterrupt(latched bool) error
+	DisableSlowNoMotionInterrupt() error
+}
+
+// Gyroscope interface for testing
+type Gyroscope interface {
+	SoftReset() error
+}
+
 // InterruptPoller interface for enabling/disabling interrupt polling
 type InterruptPoller interface {
 	Enable()
@@ -18,14 +34,14 @@ type InterruptPoller interface {
 
 // HardwareController controls the BMX055 hardware directly
 type HardwareController struct {
-	accel  *bmx.Accelerometer
-	gyro   *bmx.Gyroscope
+	accel  Accelerometer
+	gyro   Gyroscope
 	poller InterruptPoller
 	log    *slog.Logger
 }
 
 // NewHardwareController creates a new hardware controller
-func NewHardwareController(accel *bmx.Accelerometer, gyro *bmx.Gyroscope, poller InterruptPoller, log *slog.Logger) *HardwareController {
+func NewHardwareController(accel Accelerometer, gyro Gyroscope, poller InterruptPoller, log *slog.Logger) *HardwareController {
 	return &HardwareController{
 		accel:  accel,
 		gyro:   gyro,
