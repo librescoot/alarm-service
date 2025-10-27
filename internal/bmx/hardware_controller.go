@@ -120,11 +120,15 @@ func (c *HardwareController) EnableInterrupt(ctx context.Context) error {
 func (c *HardwareController) DisableInterrupt(ctx context.Context) error {
 	c.log.Info("disabling interrupt")
 
-	if err := c.accel.DisableSlowNoMotionInterrupt(); err != nil {
+	err := c.accel.DisableSlowNoMotionInterrupt()
+
+	// Always disable the poller, even if hardware disable fails
+	// to prevent polling potentially broken hardware
+	c.poller.Disable()
+
+	if err != nil {
 		return fmt.Errorf("failed to disable interrupt: %w", err)
 	}
-
-	c.poller.Disable()
 
 	return nil
 }
