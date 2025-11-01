@@ -55,6 +55,10 @@ func (sm *StateMachine) getTransition(event Event) State {
 		}
 
 	case StateArmed:
+		if _, ok := event.(SeatboxOpenedEvent); ok {
+			sm.preSeatboxState = StateArmed
+			return StateSeatboxAccess
+		}
 		if _, ok := event.(MinorMovementEvent); ok {
 			return StateTriggerLevel1Wait
 		}
@@ -74,6 +78,10 @@ func (sm *StateMachine) getTransition(event Event) State {
 		}
 
 	case StateTriggerLevel1Wait:
+		if _, ok := event.(SeatboxOpenedEvent); ok {
+			sm.preSeatboxState = StateTriggerLevel1Wait
+			return StateSeatboxAccess
+		}
 		if _, ok := event.(Level1CooldownTimerEvent); ok {
 			return StateTriggerLevel1
 		}
@@ -87,6 +95,10 @@ func (sm *StateMachine) getTransition(event Event) State {
 		}
 
 	case StateTriggerLevel1:
+		if _, ok := event.(SeatboxOpenedEvent); ok {
+			sm.preSeatboxState = StateTriggerLevel1
+			return StateSeatboxAccess
+		}
 		if _, ok := event.(Level1CheckTimerEvent); ok {
 			return StateDelayArmed
 		}
@@ -140,6 +152,20 @@ func (sm *StateMachine) getTransition(event Event) State {
 			sm.alarmEnabled = false
 			return StateWaitingEnabled
 		}
+
+	case StateSeatboxAccess:
+		if _, ok := event.(SeatboxClosedEvent); ok {
+			sm.seatboxLockClosed = true
+			return StateDelayArmed
+		}
+		if e, ok := event.(VehicleStateChangedEvent); ok && e.State != VehicleStateStandby {
+			sm.vehicleStandby = false
+			return StateDisarmed
+		}
+		if e, ok := event.(AlarmModeChangedEvent); ok && !e.Enabled {
+			sm.alarmEnabled = false
+			return StateWaitingEnabled
+		}
 	}
 
 	return sm.state
@@ -166,6 +192,8 @@ func (sm *StateMachine) enterState(ctx context.Context, state State) {
 		sm.onEnterTriggerLevel2(ctx)
 	case StateWaitingMovement:
 		sm.onEnterWaitingMovement(ctx)
+	case StateSeatboxAccess:
+		sm.onEnterSeatboxAccess(ctx)
 	}
 }
 
@@ -184,5 +212,7 @@ func (sm *StateMachine) exitState(ctx context.Context, state State) {
 		sm.onExitTriggerLevel2(ctx)
 	case StateWaitingMovement:
 		sm.onExitWaitingMovement(ctx)
+	case StateSeatboxAccess:
+		sm.onExitSeatboxAccess(ctx)
 	}
 }

@@ -98,6 +98,16 @@ type ManualTriggerEvent struct {
 
 func (e ManualTriggerEvent) Type() string { return "manual_trigger" }
 
+// SeatboxOpenedEvent signals authorized seatbox opening
+type SeatboxOpenedEvent struct{}
+
+func (e SeatboxOpenedEvent) Type() string { return "seatbox_opened" }
+
+// SeatboxClosedEvent signals seatbox was closed
+type SeatboxClosedEvent struct{}
+
+func (e SeatboxClosedEvent) Type() string { return "seatbox_closed" }
+
 // VehicleState represents the vehicle state
 type VehicleState int
 

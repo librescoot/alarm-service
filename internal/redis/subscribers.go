@@ -53,6 +53,23 @@ func (s *Subscriber) SubscribeToVehicleState(ctx context.Context) {
 				s.log.Debug("vehicle state changed", "state", state.String())
 				s.sm.SendEvent(fsm.VehicleStateChangedEvent{State: state})
 			}
+
+			if msg.Payload == "seatbox:opened" {
+				s.log.Info("authorized seatbox opening detected")
+				s.sm.SendEvent(fsm.SeatboxOpenedEvent{})
+			}
+
+			if msg.Payload == "seatbox:lock" {
+				lockState, err := s.client.HGet(ctx, "vehicle", "seatbox:lock")
+				if err != nil {
+					s.log.Error("failed to get seatbox lock state from redis", "error", err)
+					continue
+				}
+				s.log.Debug("seatbox lock state changed", "state", lockState)
+				if lockState == "closed" {
+					s.sm.SendEvent(fsm.SeatboxClosedEvent{})
+				}
+			}
 		}
 	}
 }

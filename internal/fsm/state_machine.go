@@ -20,6 +20,7 @@ const (
 	StateTriggerLevel1
 	StateTriggerLevel2
 	StateWaitingMovement
+	StateSeatboxAccess
 )
 
 func (s State) String() string {
@@ -33,6 +34,7 @@ func (s State) String() string {
 		"trigger_level_1",
 		"trigger_level_2",
 		"waiting_movement",
+		"seatbox_access",
 	}[s]
 }
 
@@ -92,12 +94,14 @@ type StateMachine struct {
 	inhibitor       SuspendInhibitor
 	alarmController AlarmController
 
-	timers         map[string]*time.Timer
-	alarmEnabled   bool
-	vehicleStandby bool
-	level2Cycles   int
-	requestDisarm  bool
-	alarmDuration  int
+	timers             map[string]*time.Timer
+	alarmEnabled       bool
+	vehicleStandby     bool
+	level2Cycles       int
+	requestDisarm      bool
+	alarmDuration      int
+	preSeatboxState    State
+	seatboxLockClosed  bool
 }
 
 // BMXClient interface for BMX commands
@@ -138,19 +142,21 @@ func New(
 	log *slog.Logger,
 ) *StateMachine {
 	return &StateMachine{
-		state:           StateInit,
-		events:          make(chan Event, 100),
-		log:             log,
-		bmxClient:       bmx,
-		publisher:       pub,
-		inhibitor:       inh,
-		alarmController: alarm,
-		timers:          make(map[string]*time.Timer),
-		alarmEnabled:    false,
-		vehicleStandby:  false,
-		level2Cycles:    0,
-		requestDisarm:   false,
-		alarmDuration:   alarmDuration,
+		state:             StateInit,
+		events:            make(chan Event, 100),
+		log:               log,
+		bmxClient:         bmx,
+		publisher:         pub,
+		inhibitor:         inh,
+		alarmController:   alarm,
+		timers:            make(map[string]*time.Timer),
+		alarmEnabled:      false,
+		vehicleStandby:    false,
+		level2Cycles:      0,
+		requestDisarm:     false,
+		alarmDuration:     alarmDuration,
+		preSeatboxState:   StateInit,
+		seatboxLockClosed: true,
 	}
 }
 
@@ -255,6 +261,8 @@ func (sm *StateMachine) stateToStatus(state State) string {
 		return "level-1-triggered"
 	case StateTriggerLevel2, StateWaitingMovement:
 		return "level-2-triggered"
+	case StateSeatboxAccess:
+		return "seatbox-access"
 	default:
 		return "unknown"
 	}

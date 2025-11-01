@@ -195,3 +195,28 @@ func (sm *StateMachine) onExitWaitingMovement(ctx context.Context) {
 	sm.stopTimer("waiting_movement")
 	sm.alarmController.Stop()
 }
+
+// onEnterSeatboxAccess handles entry to seatbox_access state
+func (sm *StateMachine) onEnterSeatboxAccess(ctx context.Context) {
+	sm.log.Info("entering seatbox_access state", "previous_state", sm.preSeatboxState.String())
+
+	if err := sm.inhibitor.Acquire("Seatbox access"); err != nil {
+		sm.log.Error("failed to acquire inhibitor", "error", err)
+	}
+
+	if err := sm.bmxClient.SoftReset(ctx); err != nil {
+		sm.log.Error("failed to soft reset", "error", err)
+	}
+
+	if err := sm.bmxClient.DisableInterrupt(ctx); err != nil {
+		sm.log.Error("failed to disable interrupt", "error", err)
+	}
+
+	sm.configureBMX(ctx, InterruptPinNone, SensitivityLow)
+}
+
+// onExitSeatboxAccess handles exit from seatbox_access state
+func (sm *StateMachine) onExitSeatboxAccess(ctx context.Context) {
+	sm.log.Info("exiting seatbox_access state")
+	sm.inhibitor.Release()
+}
