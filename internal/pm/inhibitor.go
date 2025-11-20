@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"syscall"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -34,7 +35,9 @@ func NewInhibitor(log *slog.Logger) (*Inhibitor, error) {
 
 // Close closes the inhibitor and releases any held locks
 func (i *Inhibitor) Close() error {
-	i.Release()
+	if err := i.Release(); err != nil {
+		return err
+	}
 	return i.conn.Close()
 }
 
@@ -87,15 +90,9 @@ func (i *Inhibitor) releaseUnsafe() error {
 		return nil
 	}
 
-	if err := i.conn.Close(); err != nil {
+	if err := syscall.Close(int(i.fd)); err != nil {
 		i.log.Warn("error closing inhibitor fd", "error", err)
 	}
-
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		return fmt.Errorf("failed to reconnect to system bus: %w", err)
-	}
-	i.conn = conn
 
 	i.hasLock = false
 	i.lastReason = ""
