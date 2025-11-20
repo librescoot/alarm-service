@@ -68,6 +68,15 @@ func (s *Subscriber) SubscribeToVehicleState(ctx context.Context) {
 				s.log.Debug("seatbox lock state changed", "state", lockState)
 				if lockState == "closed" {
 					s.sm.SendEvent(fsm.SeatboxClosedEvent{})
+				} else if lockState == "open" {
+					// Check if this is an unauthorized opening
+					// If we're in SeatboxAccess state, the opening was authorized
+					// If we're in any other armed state, it's unauthorized
+					currentState := s.sm.State()
+					if currentState != fsm.StateSeatboxAccess {
+						s.log.Warn("unauthorized seatbox opening detected", "current_state", currentState.String())
+						s.sm.SendEvent(fsm.UnauthorizedSeatboxEvent{})
+					}
 				}
 			}
 		}

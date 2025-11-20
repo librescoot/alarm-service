@@ -45,6 +45,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(DelayArmedTimerEvent); ok {
 			return StateArmed
 		}
+		if _, ok := event.(UnauthorizedSeatboxEvent); ok {
+			return StateTriggerLevel2
+		}
 		if e, ok := event.(VehicleStateChangedEvent); ok && e.State != VehicleStateStandby {
 			sm.vehicleStandby = false
 			return StateDisarmed
@@ -58,6 +61,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(SeatboxOpenedEvent); ok {
 			sm.preSeatboxState = StateArmed
 			return StateSeatboxAccess
+		}
+		if _, ok := event.(UnauthorizedSeatboxEvent); ok {
+			return StateTriggerLevel2
 		}
 		if _, ok := event.(MinorMovementEvent); ok {
 			return StateTriggerLevel1Wait
@@ -82,6 +88,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 			sm.preSeatboxState = StateTriggerLevel1Wait
 			return StateSeatboxAccess
 		}
+		if _, ok := event.(UnauthorizedSeatboxEvent); ok {
+			return StateTriggerLevel2
+		}
 		if _, ok := event.(Level1CooldownTimerEvent); ok {
 			return StateTriggerLevel1
 		}
@@ -98,6 +107,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(SeatboxOpenedEvent); ok {
 			sm.preSeatboxState = StateTriggerLevel1
 			return StateSeatboxAccess
+		}
+		if _, ok := event.(UnauthorizedSeatboxEvent); ok {
+			return StateTriggerLevel2
 		}
 		if _, ok := event.(Level1CheckTimerEvent); ok {
 			return StateDelayArmed

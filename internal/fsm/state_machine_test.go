@@ -599,3 +599,137 @@ func TestStateMachine_BMXConfigurationInStates(t *testing.T) {
 		}
 	}
 }
+
+func TestStateMachine_UnauthorizedSeatboxFromArmed(t *testing.T) {
+	sm, _, _, _, alarm := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.alarmDuration = 10
+
+	sm.SendEvent(UnauthorizedSeatboxEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateTriggerLevel2 {
+		t.Errorf("expected StateTriggerLevel2 on unauthorized seatbox, got %s", sm.State())
+	}
+
+	if !alarm.active {
+		t.Error("expected alarm to be active")
+	}
+}
+
+func TestStateMachine_UnauthorizedSeatboxFromDelayArmed(t *testing.T) {
+	sm, _, _, _, alarm := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateDelayArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.alarmDuration = 10
+
+	sm.SendEvent(UnauthorizedSeatboxEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateTriggerLevel2 {
+		t.Errorf("expected StateTriggerLevel2 on unauthorized seatbox, got %s", sm.State())
+	}
+
+	if !alarm.active {
+		t.Error("expected alarm to be active")
+	}
+}
+
+func TestStateMachine_UnauthorizedSeatboxFromLevel1Wait(t *testing.T) {
+	sm, _, _, _, alarm := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateTriggerLevel1Wait
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.alarmDuration = 10
+
+	sm.SendEvent(UnauthorizedSeatboxEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateTriggerLevel2 {
+		t.Errorf("expected StateTriggerLevel2 on unauthorized seatbox, got %s", sm.State())
+	}
+
+	if !alarm.active {
+		t.Error("expected alarm to be active")
+	}
+}
+
+func TestStateMachine_UnauthorizedSeatboxFromLevel1(t *testing.T) {
+	sm, _, _, _, alarm := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateTriggerLevel1
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.alarmDuration = 10
+
+	sm.SendEvent(UnauthorizedSeatboxEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateTriggerLevel2 {
+		t.Errorf("expected StateTriggerLevel2 on unauthorized seatbox, got %s", sm.State())
+	}
+
+	if !alarm.active {
+		t.Error("expected alarm to be active")
+	}
+}
+
+func TestStateMachine_AuthorizedSeatboxAccess(t *testing.T) {
+	sm, bmx, _, inh, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+
+	sm.SendEvent(SeatboxOpenedEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateSeatboxAccess {
+		t.Errorf("expected StateSeatboxAccess on authorized opening, got %s", sm.State())
+	}
+
+	if !inh.acquired {
+		t.Error("expected suspend inhibitor to be acquired in seatbox access")
+	}
+
+	if bmx.interruptEnabled {
+		t.Error("expected interrupt to be disabled during seatbox access")
+	}
+
+	if sm.preSeatboxState != StateArmed {
+		t.Errorf("expected preSeatboxState to be StateArmed, got %s", sm.preSeatboxState)
+	}
+}
+
+func TestStateMachine_SeatboxAccessToDelayArmed(t *testing.T) {
+	sm, _, _, inh, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateSeatboxAccess
+	sm.preSeatboxState = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	inh.acquired = true
+
+	sm.SendEvent(SeatboxClosedEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateDelayArmed {
+		t.Errorf("expected StateDelayArmed after seatbox closed, got %s", sm.State())
+	}
+
+	if !sm.seatboxLockClosed {
+		t.Error("expected seatboxLockClosed to be true")
+	}
+}

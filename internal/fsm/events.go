@@ -108,6 +108,11 @@ type SeatboxClosedEvent struct{}
 
 func (e SeatboxClosedEvent) Type() string { return "seatbox_closed" }
 
+// UnauthorizedSeatboxEvent signals unauthorized seatbox opening
+type UnauthorizedSeatboxEvent struct{}
+
+func (e UnauthorizedSeatboxEvent) Type() string { return "unauthorized_seatbox" }
+
 // VehicleState represents the vehicle state
 type VehicleState int
 
