@@ -11,22 +11,24 @@ import (
 
 // Subscriber handles subscribing to Redis channels using HashWatcher
 type Subscriber struct {
-	vehicleWatcher  *ipc.HashWatcher
-	settingsWatcher *ipc.HashWatcher
-	bmxWatcher      *ipc.Subscription[string]
-	ipc             *ipc.Client
-	log             *slog.Logger
-	sm              *fsm.StateMachine
+	vehicleWatcher        *ipc.HashWatcher
+	settingsWatcher       *ipc.HashWatcher
+	bmxWatcher            *ipc.Subscription[string]
+	ipc                   *ipc.Client
+	log                   *slog.Logger
+	sm                    *fsm.StateMachine
+	seatboxTriggerEnabled bool
 }
 
 // NewSubscriber creates a new Subscriber with HashWatcher instances
 func NewSubscriber(client *Client, sm *fsm.StateMachine, log *slog.Logger) *Subscriber {
 	s := &Subscriber{
-		vehicleWatcher:  client.ipc.NewHashWatcher("vehicle"),
-		settingsWatcher: client.ipc.NewHashWatcher("settings"),
-		ipc:             client.ipc,
-		log:             log,
-		sm:              sm,
+		vehicleWatcher:        client.ipc.NewHashWatcher("vehicle"),
+		settingsWatcher:       client.ipc.NewHashWatcher("settings"),
+		ipc:                   client.ipc,
+		log:                   log,
+		sm:                    sm,
+		seatboxTriggerEnabled: true, // default: seatbox opening can trigger alarm
 	}
 
 	s.setupVehicleWatcher()
@@ -56,7 +58,13 @@ func (s *Subscriber) setupVehicleWatcher() {
 			s.sm.SendEvent(fsm.SeatboxClosedEvent{})
 		} else if lockState == "open" {
 			currentState := s.sm.State()
-			if currentState != fsm.StateSeatboxAccess {
+			if currentState == fsm.StateSeatboxAccess {
+				return nil
+			}
+			if !s.seatboxTriggerEnabled {
+				s.log.Info("seatbox opened, treating as authorized (seatbox-trigger disabled)")
+				s.sm.SendEvent(fsm.SeatboxOpenedEvent{})
+			} else {
 				s.log.Warn("unauthorized seatbox opening detected", "current_state", currentState.String())
 				s.sm.SendEvent(fsm.UnauthorizedSeatboxEvent{})
 			}
@@ -99,6 +107,13 @@ func (s *Subscriber) setupSettingsWatcher() {
 		}
 		s.log.Debug("alarm duration changed", "duration", duration)
 		s.sm.SendEvent(fsm.AlarmDurationChangedEvent{Duration: duration})
+		return nil
+	})
+
+	s.settingsWatcher.OnField("alarm.seatbox-trigger", func(seatboxTrigger string) error {
+		enabled := seatboxTrigger == "true"
+		s.log.Info("seatbox-trigger setting changed", "enabled", enabled)
+		s.seatboxTriggerEnabled = enabled
 		return nil
 	})
 }

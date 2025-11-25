@@ -18,13 +18,15 @@ import (
 
 // Config holds application configuration
 type Config struct {
-	I2CBus          string
-	RedisAddr       string
-	Logger          *slog.Logger
-	AlarmDuration   int
-	DurationFlagSet bool
-	HornEnabled     bool
-	HornFlagSet     bool
+	I2CBus                string
+	RedisAddr             string
+	Logger                *slog.Logger
+	AlarmDuration         int
+	DurationFlagSet       bool
+	HornEnabled           bool
+	HornFlagSet           bool
+	SeatboxTrigger        bool
+	SeatboxTriggerFlagSet bool
 }
 
 // App represents the alarm-service application
@@ -203,6 +205,17 @@ func (a *App) handleCLIOverrides() error {
 		durationValue := fmt.Sprintf("%d", a.cfg.AlarmDuration)
 		if err := settingsPub.Set("alarm.duration", durationValue); err != nil {
 			return fmt.Errorf("failed to set alarm.duration: %w", err)
+		}
+	}
+
+	if a.cfg.SeatboxTriggerFlagSet {
+		a.log.Info("seatbox-trigger flag set, writing to Redis", "enabled", a.cfg.SeatboxTrigger)
+		seatboxValue := "false"
+		if a.cfg.SeatboxTrigger {
+			seatboxValue = "true"
+		}
+		if err := settingsPub.Set("alarm.seatbox-trigger", seatboxValue); err != nil {
+			return fmt.Errorf("failed to set alarm.seatbox-trigger: %w", err)
 		}
 	}
 

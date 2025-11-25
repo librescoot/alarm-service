@@ -23,17 +23,22 @@ func main() {
 	logLevel := flag.String("log-level", "info", "Log level: debug, info, warn, error")
 	alarmDuration := flag.Int("alarm-duration", 10, "Alarm duration in seconds")
 	hornEnabled := flag.Bool("horn-enabled", false, "Enable horn during alarm")
+	seatboxTrigger := flag.Bool("seatbox-trigger", true, "Trigger alarm on unauthorized seatbox opening")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
 	hornFlagSet := false
 	durationFlagSet := false
+	seatboxTriggerFlagSet := false
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "horn-enabled" {
 			hornFlagSet = true
 		}
 		if f.Name == "alarm-duration" {
 			durationFlagSet = true
+		}
+		if f.Name == "seatbox-trigger" {
+			seatboxTriggerFlagSet = true
 		}
 	})
 
@@ -57,16 +62,19 @@ func main() {
 		"redis", *redisAddr,
 		"log_level", *logLevel,
 		"alarm_duration", *alarmDuration,
-		"horn_enabled", *hornEnabled)
+		"horn_enabled", *hornEnabled,
+		"seatbox_trigger", *seatboxTrigger)
 
 	application := app.New(&app.Config{
-		I2CBus:          *i2cBus,
-		RedisAddr:       *redisAddr,
-		Logger:          logger,
-		AlarmDuration:   *alarmDuration,
-		DurationFlagSet: durationFlagSet,
-		HornEnabled:     *hornEnabled,
-		HornFlagSet:     hornFlagSet,
+		I2CBus:                *i2cBus,
+		RedisAddr:             *redisAddr,
+		Logger:                logger,
+		AlarmDuration:         *alarmDuration,
+		DurationFlagSet:       durationFlagSet,
+		HornEnabled:           *hornEnabled,
+		HornFlagSet:           hornFlagSet,
+		SeatboxTrigger:        *seatboxTrigger,
+		SeatboxTriggerFlagSet: seatboxTriggerFlagSet,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
