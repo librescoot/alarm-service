@@ -4,33 +4,57 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 
-	"github.com/redis/go-redis/v9"
+	ipc "github.com/librescoot/redis-ipc"
 )
 
-// Client wraps redis.Client with additional functionality
+// Client wraps redis-ipc client
 type Client struct {
-	rdb *redis.Client
+	ipc *ipc.Client
 	log *slog.Logger
 }
 
-// NewClient creates a new Redis client
-func NewClient(addr string, log *slog.Logger) *Client {
-	rdb := redis.NewClient(&redis.Options{
-		Addr: addr,
-		DB:   0,
-	})
+// NewClient creates a new Redis client using redis-ipc
+func NewClient(addr string, log *slog.Logger) (*Client, error) {
+	parts := strings.Split(addr, ":")
+	host := "localhost"
+	port := 6379
+
+	if len(parts) == 2 {
+		host = parts[0]
+		if p, err := strconv.Atoi(parts[1]); err == nil {
+			port = p
+		}
+	} else if len(parts) == 1 && parts[0] != "" {
+		host = parts[0]
+	}
+
+	client, err := ipc.New(
+		ipc.WithAddress(host),
+		ipc.WithPort(port),
+		ipc.WithCodec(ipc.StringCodec{}),
+		ipc.WithOnDisconnect(func(err error) {
+			if err != nil {
+				log.Warn("Redis disconnected", "error", err)
+			}
+		}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create redis-ipc client: %w", err)
+	}
 
 	return &Client{
-		rdb: rdb,
+		ipc: client,
 		log: log,
-	}
+	}, nil
 }
 
 // Connect tests the connection to Redis
 func (c *Client) Connect(ctx context.Context) error {
-	if err := c.rdb.Ping(ctx).Err(); err != nil {
-		return fmt.Errorf("failed to connect to Redis: %w", err)
+	if !c.ipc.Connected() {
+		return fmt.Errorf("not connected to Redis")
 	}
 	c.log.Info("connected to Redis")
 	return nil
@@ -38,30 +62,10 @@ func (c *Client) Connect(ctx context.Context) error {
 
 // Close closes the Redis connection
 func (c *Client) Close() error {
-	return c.rdb.Close()
+	return c.ipc.Close()
 }
 
-// HSet sets a field in a hash
-func (c *Client) HSet(ctx context.Context, key string, field string, value interface{}) error {
-	return c.rdb.HSet(ctx, key, field, value).Err()
-}
-
-// HGet gets a field from a hash
-func (c *Client) HGet(ctx context.Context, key string, field string) (string, error) {
-	return c.rdb.HGet(ctx, key, field).Result()
-}
-
-// Publish publishes a message to a channel
-func (c *Client) Publish(ctx context.Context, channel string, message string) error {
-	return c.rdb.Publish(ctx, channel, message).Err()
-}
-
-// Subscribe subscribes to a channel
-func (c *Client) Subscribe(ctx context.Context, channel string) *redis.PubSub {
-	return c.rdb.Subscribe(ctx, channel)
-}
-
-// GetRedisClient returns the underlying redis client
-func (c *Client) GetRedisClient() *redis.Client {
-	return c.rdb
+// IPC returns the underlying redis-ipc client for direct access
+func (c *Client) IPC() *ipc.Client {
+	return c.ipc
 }

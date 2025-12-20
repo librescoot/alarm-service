@@ -7,12 +7,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	ipc "github.com/librescoot/redis-ipc"
 )
 
 // Controller manages alarm activation (horn + hazard lights)
 type Controller struct {
-	redis       *redis.Client
+	ipc         *ipc.Client
+	alarmPub    *ipc.HashPublisher
+	settingsPub *ipc.HashPublisher
+	cmdHandler  *ipc.QueueHandler[string]
 	ctx         context.Context
 	cancel      context.CancelFunc
 	log         *slog.Logger
@@ -21,31 +24,44 @@ type Controller struct {
 	hornEnabled bool
 }
 
-// NewController creates a new alarm controller
+// NewController creates a new alarm controller using redis-ipc
 func NewController(redisAddr string, hornEnabled bool, log *slog.Logger) (*Controller, error) {
-	rdb := redis.NewClient(&redis.Options{
-		Addr: redisAddr,
-		DB:   0,
-	})
-
-	ctx := context.Background()
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
+	client, err := ipc.New(
+		ipc.WithAddress(redisAddr),
+		ipc.WithCodec(ipc.StringCodec{}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create redis-ipc client: %w", err)
 	}
 
-	return &Controller{
-		redis:       rdb,
+	ctx := context.Background()
+
+	c := &Controller{
+		ipc:         client,
+		alarmPub:    client.NewHashPublisher("alarm"),
+		settingsPub: client.NewHashPublisher("settings"),
 		ctx:         ctx,
 		log:         log,
 		active:      false,
 		hornEnabled: hornEnabled,
-	}, nil
+	}
+
+	c.cmdHandler = ipc.HandleRequests(client, "scooter:alarm", func(cmd string) error {
+		c.log.Info("received alarm command", "command", cmd)
+		c.handleCommand(cmd)
+		return nil
+	})
+
+	return c, nil
 }
 
 // Close closes the controller
 func (c *Controller) Close() error {
 	c.Stop()
-	return c.redis.Close()
+	if c.cmdHandler != nil {
+		c.cmdHandler.Stop()
+	}
+	return c.ipc.Close()
 }
 
 // SetHornEnabled updates the horn enabled setting
@@ -72,12 +88,11 @@ func (c *Controller) Start(duration time.Duration) error {
 	c.cancel = cancel
 	c.active = true
 
-	if err := c.redis.LPush(ctx, "scooter:blinker", "both").Err(); err != nil {
+	if _, err := c.ipc.LPush(ctx, "scooter:blinker", "both"); err != nil {
 		c.log.Error("failed to activate hazard lights", "error", err)
 	}
 
-	c.redis.HSet(ctx, "alarm", "alarm-active", "true")
-	c.redis.Publish(ctx, "alarm", "alarm-active")
+	c.alarmPub.Set(ctx, "alarm-active", "true")
 
 	go c.runHornPattern(ctx, duration)
 
@@ -105,12 +120,11 @@ func (c *Controller) stopUnsafe() error {
 
 	ctx := context.Background()
 	if c.hornEnabled {
-		c.redis.LPush(ctx, "scooter:horn", "off")
+		c.ipc.LPush(ctx, "scooter:horn", "off")
 	}
-	c.redis.LPush(ctx, "scooter:blinker", "off")
+	c.ipc.LPush(ctx, "scooter:blinker", "off")
 
-	c.redis.HSet(ctx, "alarm", "alarm-active", "false")
-	c.redis.Publish(ctx, "alarm", "alarm-active")
+	c.alarmPub.Set(ctx, "alarm-active", "false")
 
 	c.active = false
 	return nil
@@ -140,40 +154,12 @@ func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration)
 		case <-ticker.C:
 			if c.hornEnabled {
 				if hornOn {
-					c.redis.LPush(ctx, "scooter:horn", "on")
+					_, _ = c.ipc.LPush(ctx, "scooter:horn", "on")
 				} else {
-					c.redis.LPush(ctx, "scooter:horn", "off")
+					_, _ = c.ipc.LPush(ctx, "scooter:horn", "off")
 				}
 			}
 			hornOn = !hornOn
-		}
-	}
-}
-
-// ListenForCommands listens for alarm commands on scooter:alarm
-func (c *Controller) ListenForCommands(ctx context.Context) {
-	c.log.Info("starting alarm command listener")
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-
-		default:
-			result, err := c.redis.BRPop(ctx, 5*time.Second, "scooter:alarm").Result()
-			if err != nil {
-				if err == redis.Nil || err == context.Canceled {
-					continue
-				}
-				c.log.Error("error reading from scooter:alarm", "error", err)
-				continue
-			}
-
-			if len(result) >= 2 {
-				command := result[1]
-				c.log.Info("received alarm command", "command", command)
-				c.handleCommand(command)
-			}
 		}
 	}
 }
@@ -184,17 +170,14 @@ func (c *Controller) BlinkHazards() error {
 
 	ctx := context.Background()
 
-	// Turn on hazards
-	if err := c.redis.LPush(ctx, "scooter:blinker", "both").Err(); err != nil {
+	if _, err := c.ipc.LPush(ctx, "scooter:blinker", "both"); err != nil {
 		c.log.Error("failed to activate hazard lights", "error", err)
 		return err
 	}
 
-	// Wait for one blink cycle
 	time.Sleep(800 * time.Millisecond)
 
-	// Turn off hazards
-	if err := c.redis.LPush(ctx, "scooter:blinker", "off").Err(); err != nil {
+	if _, err := c.ipc.LPush(ctx, "scooter:blinker", "off"); err != nil {
 		c.log.Error("failed to deactivate hazard lights", "error", err)
 		return err
 	}
@@ -211,13 +194,11 @@ func (c *Controller) handleCommand(cmd string) {
 		c.Stop()
 		return
 	case "enable":
-		c.redis.HSet(ctx, "settings", "alarm.enabled", "true")
-		c.redis.Publish(ctx, "settings", "alarm.enabled")
+		c.settingsPub.Set(ctx, "alarm.enabled", "true")
 		c.log.Info("alarm enabled via command")
 		return
 	case "disable":
-		c.redis.HSet(ctx, "settings", "alarm.enabled", "false")
-		c.redis.Publish(ctx, "settings", "alarm.enabled")
+		c.settingsPub.Set(ctx, "alarm.enabled", "false")
 		c.log.Info("alarm disabled via command")
 		return
 	}

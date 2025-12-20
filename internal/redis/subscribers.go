@@ -6,216 +6,148 @@ import (
 	"log/slog"
 
 	"alarm-service/internal/fsm"
+
+	ipc "github.com/librescoot/redis-ipc"
 )
 
-// Subscriber handles subscribing to Redis channels
+// Subscriber handles subscribing to Redis channels using HashWatcher
 type Subscriber struct {
-	client *Client
-	log    *slog.Logger
-	sm     *fsm.StateMachine
+	vehicleWatcher  *ipc.HashWatcher
+	settingsWatcher *ipc.HashWatcher
+	bmxWatcher      *ipc.Subscription[string]
+	ipc             *ipc.Client
+	log             *slog.Logger
+	sm              *fsm.StateMachine
 }
 
-// NewSubscriber creates a new Subscriber
+// NewSubscriber creates a new Subscriber with HashWatcher instances
 func NewSubscriber(client *Client, sm *fsm.StateMachine, log *slog.Logger) *Subscriber {
-	return &Subscriber{
-		client: client,
-		log:    log,
-		sm:     sm,
+	s := &Subscriber{
+		vehicleWatcher:  client.ipc.NewHashWatcher("vehicle"),
+		settingsWatcher: client.ipc.NewHashWatcher("settings"),
+		ipc:             client.ipc,
+		log:             log,
+		sm:              sm,
 	}
+
+	s.setupVehicleWatcher()
+	s.setupSettingsWatcher()
+
+	return s
 }
 
-// SubscribeToVehicleState subscribes to vehicle state changes
-func (s *Subscriber) SubscribeToVehicleState(ctx context.Context) {
-	s.log.Info("subscribing to vehicle state")
+// setupVehicleWatcher registers handlers for vehicle state changes
+func (s *Subscriber) setupVehicleWatcher() {
+	s.vehicleWatcher.OnField("state", func(stateStr string) error {
+		state := fsm.ParseVehicleState(stateStr)
+		s.log.Debug("vehicle state changed", "state", state.String())
+		s.sm.SendEvent(fsm.VehicleStateChangedEvent{State: state})
+		return nil
+	})
 
-	pubsub := s.client.Subscribe(ctx, "vehicle")
-	defer pubsub.Close()
+	s.vehicleWatcher.OnField("seatbox:opened", func(value string) error {
+		s.log.Info("authorized seatbox opening detected")
+		s.sm.SendEvent(fsm.SeatboxOpenedEvent{})
+		return nil
+	})
 
-	ch := pubsub.Channel()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-
-		case msg := <-ch:
-			if msg == nil {
-				continue
+	s.vehicleWatcher.OnField("seatbox:lock", func(lockState string) error {
+		s.log.Debug("seatbox lock state changed", "state", lockState)
+		if lockState == "closed" {
+			s.sm.SendEvent(fsm.SeatboxClosedEvent{})
+		} else if lockState == "open" {
+			currentState := s.sm.State()
+			if currentState != fsm.StateSeatboxAccess {
+				s.log.Warn("unauthorized seatbox opening detected", "current_state", currentState.String())
+				s.sm.SendEvent(fsm.UnauthorizedSeatboxEvent{})
 			}
+		}
+		return nil
+	})
+}
 
-			if msg.Payload == "state" {
-				stateStr, err := s.client.HGet(ctx, "vehicle", "state")
-				if err != nil {
-					s.log.Error("failed to get vehicle state from redis", "error", err)
-					continue
-				}
-				state := fsm.ParseVehicleState(stateStr)
-				s.log.Debug("vehicle state changed", "state", state.String())
+// setupSettingsWatcher registers handlers for alarm settings changes
+func (s *Subscriber) setupSettingsWatcher() {
+	s.settingsWatcher.OnField("alarm.enabled", func(alarmEnabled string) error {
+		enabled := alarmEnabled == "true"
+		s.log.Debug("alarm enabled changed", "enabled", enabled)
+
+		if enabled {
+			vehicleState, err := s.vehicleWatcher.Fetch(context.Background(), "state")
+			if err == nil {
+				state := fsm.ParseVehicleState(vehicleState)
+				s.log.Debug("sending current vehicle state before alarm enable", "state", state.String())
 				s.sm.SendEvent(fsm.VehicleStateChangedEvent{State: state})
 			}
-
-			if msg.Payload == "seatbox:opened" {
-				s.log.Info("authorized seatbox opening detected")
-				s.sm.SendEvent(fsm.SeatboxOpenedEvent{})
-			}
-
-			if msg.Payload == "seatbox:lock" {
-				lockState, err := s.client.HGet(ctx, "vehicle", "seatbox:lock")
-				if err != nil {
-					s.log.Error("failed to get seatbox lock state from redis", "error", err)
-					continue
-				}
-				s.log.Debug("seatbox lock state changed", "state", lockState)
-				if lockState == "closed" {
-					s.sm.SendEvent(fsm.SeatboxClosedEvent{})
-				} else if lockState == "open" {
-					// Check if this is an unauthorized opening
-					// If we're in SeatboxAccess state, the opening was authorized
-					// If we're in any other armed state, it's unauthorized
-					currentState := s.sm.State()
-					if currentState != fsm.StateSeatboxAccess {
-						s.log.Warn("unauthorized seatbox opening detected", "current_state", currentState.String())
-						s.sm.SendEvent(fsm.UnauthorizedSeatboxEvent{})
-					}
-				}
-			}
 		}
-	}
-}
 
-// SubscribeToAlarmSettings subscribes to alarm settings changes
-func (s *Subscriber) SubscribeToAlarmSettings(ctx context.Context) {
-	s.log.Info("subscribing to alarm settings")
-
-	pubsub := s.client.Subscribe(ctx, "settings")
-	defer pubsub.Close()
-
-	ch := pubsub.Channel()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-
-		case msg := <-ch:
-			if msg == nil {
-				continue
-			}
-
-			if msg.Payload == "alarm.enabled" {
-				alarmEnabled, err := s.client.HGet(ctx, "settings", "alarm.enabled")
-				if err != nil {
-					s.log.Error("failed to get alarm.enabled from redis", "error", err)
-					continue
-				}
-				enabled := alarmEnabled == "true"
-				s.log.Debug("alarm enabled changed", "enabled", enabled)
-
-				// When enabling alarm, check current vehicle state first
-				if enabled {
-					vehicleState, err := s.client.HGet(ctx, "vehicle", "state")
-					if err == nil {
-						state := fsm.ParseVehicleState(vehicleState)
-						s.log.Debug("sending current vehicle state before alarm enable", "state", state.String())
-						s.sm.SendEvent(fsm.VehicleStateChangedEvent{State: state})
-					}
-				}
-
-				s.sm.SendEvent(fsm.AlarmModeChangedEvent{Enabled: enabled})
-			}
-
-			if msg.Payload == "alarm.honk" {
-				hornEnabled, err := s.client.HGet(ctx, "settings", "alarm.honk")
-				if err != nil {
-					s.log.Error("failed to get alarm.honk from redis", "error", err)
-					continue
-				}
-				enabled := hornEnabled == "true"
-				s.log.Debug("alarm honk changed", "enabled", enabled)
-				s.sm.SendEvent(fsm.HornSettingChangedEvent{Enabled: enabled})
-			}
-
-			if msg.Payload == "alarm.duration" {
-				durationStr, err := s.client.HGet(ctx, "settings", "alarm.duration")
-				if err != nil {
-					s.log.Error("failed to get alarm.duration from redis", "error", err)
-					continue
-				}
-				var duration int
-				if _, err := fmt.Sscanf(durationStr, "%d", &duration); err != nil {
-					s.log.Error("invalid alarm.duration value", "value", durationStr, "error", err)
-					continue
-				}
-				s.log.Debug("alarm duration changed", "duration", duration)
-				s.sm.SendEvent(fsm.AlarmDurationChangedEvent{Duration: duration})
-			}
-		}
-	}
-}
-
-// SubscribeToBMXInterrupt subscribes to BMX interrupts
-func (s *Subscriber) SubscribeToBMXInterrupt(ctx context.Context) {
-	s.log.Info("subscribing to BMX interrupts")
-
-	pubsub := s.client.Subscribe(ctx, "bmx:interrupt")
-	defer pubsub.Close()
-
-	ch := pubsub.Channel()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-
-		case msg := <-ch:
-			if msg == nil {
-				continue
-			}
-
-			s.log.Info("BMX interrupt received")
-			s.sm.SendEvent(fsm.BMXInterruptEvent{
-				Timestamp: 0,
-				Data:      msg.Payload,
-			})
-		}
-	}
-}
-
-// CheckInitialState checks initial vehicle and alarm states
-func (s *Subscriber) CheckInitialState(ctx context.Context) {
-	vehicleState, err := s.client.HGet(ctx, "vehicle", "state")
-	if err == nil {
-		state := fsm.ParseVehicleState(vehicleState)
-		s.log.Info("initial vehicle state", "state", state.String())
-		s.sm.SendEvent(fsm.VehicleStateChangedEvent{State: state})
-	}
-
-	alarmEnabled, err := s.client.HGet(ctx, "settings", "alarm.enabled")
-	if err == nil {
-		enabled := alarmEnabled == "true"
-		s.log.Info("initial alarm enabled", "enabled", enabled)
 		s.sm.SendEvent(fsm.AlarmModeChangedEvent{Enabled: enabled})
-	}
+		return nil
+	})
 
-	hornEnabled, err := s.client.HGet(ctx, "settings", "alarm.honk")
-	if err == nil {
+	s.settingsWatcher.OnField("alarm.honk", func(hornEnabled string) error {
 		enabled := hornEnabled == "true"
-		s.log.Info("initial horn enabled", "enabled", enabled)
+		s.log.Debug("alarm honk changed", "enabled", enabled)
 		s.sm.SendEvent(fsm.HornSettingChangedEvent{Enabled: enabled})
-	}
+		return nil
+	})
 
-	alarmDuration, err := s.client.HGet(ctx, "settings", "alarm.duration")
-	if err == nil {
+	s.settingsWatcher.OnField("alarm.duration", func(durationStr string) error {
 		var duration int
-		if _, err := fmt.Sscanf(alarmDuration, "%d", &duration); err == nil {
-			s.log.Info("initial alarm duration", "duration", duration)
-			s.sm.SendEvent(fsm.AlarmDurationChangedEvent{Duration: duration})
+		if _, err := fmt.Sscanf(durationStr, "%d", &duration); err != nil {
+			s.log.Error("invalid alarm.duration value", "value", durationStr, "error", err)
+			return nil
 		}
+		s.log.Debug("alarm duration changed", "duration", duration)
+		s.sm.SendEvent(fsm.AlarmDurationChangedEvent{Duration: duration})
+		return nil
+	})
+}
+
+// Start starts all watchers with initial state sync
+func (s *Subscriber) Start(ctx context.Context) error {
+	s.log.Info("starting hash watchers with initial sync")
+
+	if err := s.vehicleWatcher.StartWithSync(ctx); err != nil {
+		return fmt.Errorf("failed to start vehicle watcher: %w", err)
 	}
 
-	bmxInitialized, err := s.client.HGet(ctx, "bmx", "initialized")
+	if err := s.settingsWatcher.StartWithSync(ctx); err != nil {
+		return fmt.Errorf("failed to start settings watcher: %w", err)
+	}
+
+	s.log.Info("starting BMX interrupt subscription")
+	var err error
+	s.bmxWatcher, err = ipc.Subscribe(s.ipc, "bmx:interrupt", func(payload string) error {
+		s.log.Info("BMX interrupt received")
+		s.sm.SendEvent(fsm.BMXInterruptEvent{
+			Timestamp: 0,
+			Data:      payload,
+		})
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to bmx:interrupt: %w", err)
+	}
+
+	return nil
+}
+
+// CheckBMXInitialized checks if BMX service is already initialized
+func (s *Subscriber) CheckBMXInitialized(ctx context.Context) error {
+	bmxInitialized, err := s.ipc.HGet(ctx, "bmx", "initialized")
 	if err == nil && bmxInitialized == "true" {
 		s.log.Info("BMX service already initialized")
 		s.sm.SendEvent(fsm.InitCompleteEvent{})
+	}
+	return nil
+}
+
+// Stop stops all watchers
+func (s *Subscriber) Stop() {
+	s.vehicleWatcher.Stop()
+	s.settingsWatcher.Stop()
+	if s.bmxWatcher != nil {
+		s.bmxWatcher.Unsubscribe()
 	}
 }

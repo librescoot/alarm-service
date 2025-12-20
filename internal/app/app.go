@@ -29,18 +29,18 @@ type Config struct {
 
 // App represents the alarm-service application
 type App struct {
-	cfg              *Config
-	log              *slog.Logger
-	redis            *redis.Client
-	publisher        *redis.Publisher
-	accel            *hwbmx.Accelerometer
-	gyro             *hwbmx.Gyroscope
-	bmxController    *bmx.HardwareController
-	interruptPoller  *hardware.InterruptPoller
-	alarmController  *alarm.Controller
-	inhibitor        *pm.Inhibitor
-	stateMachine     *fsm.StateMachine
-	subscriber       *redis.Subscriber
+	cfg             *Config
+	log             *slog.Logger
+	redis           *redis.Client
+	publisher       *redis.Publisher
+	accel           *hwbmx.Accelerometer
+	gyro            *hwbmx.Gyroscope
+	bmxController   *bmx.HardwareController
+	interruptPoller *hardware.InterruptPoller
+	alarmController *alarm.Controller
+	inhibitor       *pm.Inhibitor
+	stateMachine    *fsm.StateMachine
+	subscriber      *redis.Subscriber
 }
 
 // New creates a new App
@@ -61,7 +61,11 @@ func (a *App) Run(ctx context.Context) error {
 		return fmt.Errorf("unbind drivers: %w", err)
 	}
 
-	a.redis = redis.NewClient(a.cfg.RedisAddr, a.log)
+	var err error
+	a.redis, err = redis.NewClient(a.cfg.RedisAddr, a.log)
+	if err != nil {
+		return fmt.Errorf("create redis client: %w", err)
+	}
 	if err := a.redis.Connect(ctx); err != nil {
 		return fmt.Errorf("connect to redis: %w", err)
 	}
@@ -79,7 +83,6 @@ func (a *App) Run(ctx context.Context) error {
 
 	a.bmxController = bmx.NewHardwareController(a.accel, a.gyro, a.interruptPoller, a.log)
 
-	var err error
 	a.alarmController, err = alarm.NewController(a.cfg.RedisAddr, a.cfg.HornEnabled, a.log)
 	if err != nil {
 		return fmt.Errorf("create alarm controller: %w", err)
@@ -107,38 +110,20 @@ func (a *App) Run(ctx context.Context) error {
 		a.log.Warn("failed to publish initial BMX status", "error", err)
 	}
 
-	if a.cfg.HornFlagSet {
-		a.log.Info("horn flag set, writing to Redis", "enabled", a.cfg.HornEnabled)
-		hornValue := "false"
-		if a.cfg.HornEnabled {
-			hornValue = "true"
-		}
-		if err := a.redis.HSet(ctx, "settings", "alarm.honk", hornValue); err != nil {
-			a.log.Error("failed to write alarm.honk to Redis", "error", err)
-		}
-		if err := a.redis.Publish(ctx, "settings", "alarm.honk"); err != nil {
-			a.log.Error("failed to publish alarm.honk change", "error", err)
-		}
+	if err := a.handleCLIOverrides(ctx); err != nil {
+		a.log.Warn("failed to handle CLI overrides", "error", err)
 	}
 
-	if a.cfg.DurationFlagSet {
-		a.log.Info("duration flag set, writing to Redis", "duration", a.cfg.AlarmDuration)
-		durationValue := fmt.Sprintf("%d", a.cfg.AlarmDuration)
-		if err := a.redis.HSet(ctx, "settings", "alarm.duration", durationValue); err != nil {
-			a.log.Error("failed to write alarm.duration to Redis", "error", err)
-		}
-		if err := a.redis.Publish(ctx, "settings", "alarm.duration"); err != nil {
-			a.log.Error("failed to publish alarm.duration change", "error", err)
-		}
+	if err := a.subscriber.Start(ctx); err != nil {
+		return fmt.Errorf("start subscriber: %w", err)
 	}
+	defer a.subscriber.Stop()
 
-	a.subscriber.CheckInitialState(ctx)
+	if err := a.subscriber.CheckBMXInitialized(ctx); err != nil {
+		a.log.Warn("failed to check BMX initialized state", "error", err)
+	}
 
 	go a.stateMachine.Run(ctx)
-	go a.subscriber.SubscribeToVehicleState(ctx)
-	go a.subscriber.SubscribeToAlarmSettings(ctx)
-	go a.subscriber.SubscribeToBMXInterrupt(ctx)
-	go a.alarmController.ListenForCommands(ctx)
 
 	<-ctx.Done()
 	a.log.Info("shutting down")
@@ -187,19 +172,39 @@ func (a *App) closeBMXHardware() {
 	}
 }
 
-// publishInitialStatus publishes initial BMX status to Redis
+// publishInitialStatus publishes initial BMX status to Redis using HashPublisher
 func (a *App) publishInitialStatus(ctx context.Context) error {
-	if err := a.redis.HSet(ctx, "bmx", "initialized", "true"); err != nil {
-		return err
+	bmxPub := a.redis.IPC().NewHashPublisher("bmx")
+	return bmxPub.SetMany(ctx, map[string]any{
+		"initialized": "true",
+		"interrupt":   "disabled",
+		"sensitivity": "none",
+		"pin":         "none",
+	})
+}
+
+// handleCLIOverrides handles CLI flag overrides for settings
+func (a *App) handleCLIOverrides(ctx context.Context) error {
+	settingsPub := a.redis.IPC().NewHashPublisher("settings")
+
+	if a.cfg.HornFlagSet {
+		a.log.Info("horn flag set, writing to Redis", "enabled", a.cfg.HornEnabled)
+		hornValue := "false"
+		if a.cfg.HornEnabled {
+			hornValue = "true"
+		}
+		if err := settingsPub.Set(ctx, "alarm.honk", hornValue); err != nil {
+			return fmt.Errorf("failed to set alarm.honk: %w", err)
+		}
 	}
-	if err := a.redis.HSet(ctx, "bmx", "interrupt", "disabled"); err != nil {
-		return err
+
+	if a.cfg.DurationFlagSet {
+		a.log.Info("duration flag set, writing to Redis", "duration", a.cfg.AlarmDuration)
+		durationValue := fmt.Sprintf("%d", a.cfg.AlarmDuration)
+		if err := settingsPub.Set(ctx, "alarm.duration", durationValue); err != nil {
+			return fmt.Errorf("failed to set alarm.duration: %w", err)
+		}
 	}
-	if err := a.redis.HSet(ctx, "bmx", "sensitivity", "none"); err != nil {
-		return err
-	}
-	if err := a.redis.HSet(ctx, "bmx", "pin", "none"); err != nil {
-		return err
-	}
+
 	return nil
 }
