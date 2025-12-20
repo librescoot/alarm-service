@@ -1,10 +1,9 @@
-.PHONY: build clean build-arm build-amd64 lint test
+.PHONY: build clean build-arm build-amd64 build-host dist fmt deps lint test
 
 BINARY_NAME=alarm-service
 BUILD_DIR=bin
-GIT_REVISION=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-GIT_DIRTY=$(shell git diff --quiet || echo "-dirty")
-VERSION_FLAGS=-X main.gitRevision=$(GIT_REVISION)$(GIT_DIRTY) -X main.buildTime=$(shell date -u +%Y%m%d-%H%M%S)
+VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+VERSION_FLAGS=-X main.version=$(VERSION)
 LDFLAGS=-ldflags "-w -s -extldflags '-static' $(VERSION_FLAGS)"
 CMD_DIR=cmd/alarm-service
 
@@ -37,3 +36,15 @@ dev-build:
 build-native:
 	mkdir -p $(BUILD_DIR)
 	go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./$(CMD_DIR)
+
+build-host:
+	mkdir -p $(BUILD_DIR)
+	go build -ldflags "$(VERSION_FLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME) ./$(CMD_DIR)
+
+dist: build
+
+fmt:
+	go fmt ./...
+
+deps:
+	go mod download && go mod tidy

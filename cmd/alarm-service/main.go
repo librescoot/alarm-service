@@ -12,6 +12,7 @@ import (
 )
 
 var (
+	version     = "dev"
 	gitRevision = "unknown"
 	buildTime   = "unknown"
 )
@@ -22,7 +23,7 @@ func main() {
 	logLevel := flag.String("log-level", "info", "Log level: debug, info, warn, error")
 	alarmDuration := flag.Int("alarm-duration", 10, "Alarm duration in seconds")
 	hornEnabled := flag.Bool("horn-enabled", false, "Enable horn during alarm")
-	version := flag.Bool("version", false, "Print version and exit")
+	versionFlag := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
 	hornFlagSet := false
@@ -36,7 +37,7 @@ func main() {
 		}
 	})
 
-	if *version {
+	if *versionFlag {
 		println("alarm-service")
 		println("  Revision:", gitRevision)
 		println("  Built:", buildTime)
@@ -49,7 +50,7 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
-	logger.Info("alarm-service starting",
+	logger.Info("librescoot-alarm "+version+" starting",
 		"revision", gitRevision,
 		"build_time", buildTime,
 		"i2c_bus", *i2cBus,
