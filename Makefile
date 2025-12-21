@@ -1,4 +1,4 @@
-.PHONY: build clean build-arm build-amd64 build-host dist fmt deps lint test
+.PHONY: build clean build-arm build-host dist fmt deps lint test
 
 BINARY_NAME=alarm-service
 BUILD_DIR=bin
@@ -15,10 +15,6 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 build-arm: build
-
-build-amd64:
-	mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-amd64 ./$(CMD_DIR)
 
 lint:
 	golangci-lint run
