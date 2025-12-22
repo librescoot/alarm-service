@@ -86,12 +86,12 @@ const (
 
 // Magnetometer registers
 const (
-	MAG_DATAX_LSB      = 0x42
-	MAG_DATAY_LSB      = 0x44
-	MAG_DATAZ_LSB      = 0x46
-	MAG_CHIP_ID_REG    = 0x40
-	MAG_POWER_CTRL     = 0x4B
-	MAG_OPMODE_ODR     = 0x4C
+	MAG_DATAX_LSB   = 0x42
+	MAG_DATAY_LSB   = 0x44
+	MAG_DATAZ_LSB   = 0x46
+	MAG_CHIP_ID_REG = 0x40
+	MAG_POWER_CTRL  = 0x4B
+	MAG_OPMODE_ODR  = 0x4C
 )
 
 // I2C/SMBus constants
@@ -115,10 +115,10 @@ type smbusIoctlData struct {
 
 // i2cDevice represents a generic I2C device
 type i2cDevice struct {
-	fd      int
-	bus     string
-	addr    byte
-	name    string
+	fd   int
+	bus  string
+	addr byte
+	name string
 }
 
 // openI2C opens the I2C bus and sets the slave address

@@ -94,14 +94,14 @@ type StateMachine struct {
 	inhibitor       SuspendInhibitor
 	alarmController AlarmController
 
-	timers             map[string]*time.Timer
-	alarmEnabled       bool
-	vehicleStandby     bool
-	level2Cycles       int
-	requestDisarm      bool
-	alarmDuration      int
-	preSeatboxState    State
-	seatboxLockClosed  bool
+	timers            map[string]*time.Timer
+	alarmEnabled      bool
+	vehicleStandby    bool
+	level2Cycles      int
+	requestDisarm     bool
+	alarmDuration     int
+	preSeatboxState   State
+	seatboxLockClosed bool
 }
 
 // BMXClient interface for BMX commands
@@ -115,7 +115,7 @@ type BMXClient interface {
 
 // StatusPublisher interface for publishing alarm status
 type StatusPublisher interface {
-	PublishStatus(ctx context.Context, status string) error
+	PublishStatus(status string) error
 }
 
 // SuspendInhibitor interface for managing wake locks
@@ -234,14 +234,14 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 			"to", newState.String(),
 			"event", event.Type())
 		sm.enterState(ctx, newState)
-		sm.publishCurrentStatus(ctx)
+		sm.publishCurrentStatus()
 	}
 }
 
 // publishCurrentStatus publishes the current alarm status
-func (sm *StateMachine) publishCurrentStatus(ctx context.Context) {
+func (sm *StateMachine) publishCurrentStatus() {
 	status := sm.stateToStatus(sm.state)
-	if err := sm.publisher.PublishStatus(ctx, status); err != nil {
+	if err := sm.publisher.PublishStatus(status); err != nil {
 		sm.log.Error("failed to publish status", "error", err)
 	}
 }

@@ -85,7 +85,7 @@ func (p *InterruptPoller) checkInterrupt(ctx context.Context) error {
 	p.log.Info("motion interrupt detected", "timestamp", timestamp)
 
 	payload := fmt.Sprintf("%d", timestamp)
-	if err := p.publisher.PublishInterrupt(ctx, payload); err != nil {
+	if err := p.publisher.PublishInterrupt(payload); err != nil {
 		return err
 	}
 
