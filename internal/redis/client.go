@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
-	"strings"
 
 	ipc "github.com/librescoot/redis-ipc"
 )
@@ -18,22 +16,8 @@ type Client struct {
 
 // NewClient creates a new Redis client using redis-ipc
 func NewClient(addr string, log *slog.Logger) (*Client, error) {
-	parts := strings.Split(addr, ":")
-	host := "localhost"
-	port := 6379
-
-	if len(parts) == 2 {
-		host = parts[0]
-		if p, err := strconv.Atoi(parts[1]); err == nil {
-			port = p
-		}
-	} else if len(parts) == 1 && parts[0] != "" {
-		host = parts[0]
-	}
-
 	client, err := ipc.New(
-		ipc.WithAddress(host),
-		ipc.WithPort(port),
+		ipc.WithURL(addr),
 		ipc.WithCodec(ipc.StringCodec{}),
 		ipc.WithOnDisconnect(func(err error) {
 			if err != nil {

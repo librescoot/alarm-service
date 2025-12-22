@@ -27,7 +27,7 @@ type Controller struct {
 // NewController creates a new alarm controller using redis-ipc
 func NewController(redisAddr string, hornEnabled bool, log *slog.Logger) (*Controller, error) {
 	client, err := ipc.New(
-		ipc.WithAddress(redisAddr),
+		ipc.WithURL(redisAddr),
 		ipc.WithCodec(ipc.StringCodec{}),
 	)
 	if err != nil {
@@ -88,11 +88,11 @@ func (c *Controller) Start(duration time.Duration) error {
 	c.cancel = cancel
 	c.active = true
 
-	if _, err := c.ipc.LPush(ctx, "scooter:blinker", "both"); err != nil {
+	if _, err := c.ipc.LPush("scooter:blinker", "both"); err != nil {
 		c.log.Error("failed to activate hazard lights", "error", err)
 	}
 
-	c.alarmPub.Set(ctx, "alarm-active", "true")
+	c.alarmPub.Set("alarm-active", "true")
 
 	go c.runHornPattern(ctx, duration)
 
@@ -118,13 +118,12 @@ func (c *Controller) stopUnsafe() error {
 		c.cancel()
 	}
 
-	ctx := context.Background()
 	if c.hornEnabled {
-		c.ipc.LPush(ctx, "scooter:horn", "off")
+		c.ipc.LPush("scooter:horn", "off")
 	}
-	c.ipc.LPush(ctx, "scooter:blinker", "off")
+	c.ipc.LPush("scooter:blinker", "off")
 
-	c.alarmPub.Set(ctx, "alarm-active", "false")
+	c.alarmPub.Set("alarm-active", "false")
 
 	c.active = false
 	return nil
@@ -154,9 +153,9 @@ func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration)
 		case <-ticker.C:
 			if c.hornEnabled {
 				if hornOn {
-					_, _ = c.ipc.LPush(ctx, "scooter:horn", "on")
+					_, _ = c.ipc.LPush("scooter:horn", "on")
 				} else {
-					_, _ = c.ipc.LPush(ctx, "scooter:horn", "off")
+					_, _ = c.ipc.LPush("scooter:horn", "off")
 				}
 			}
 			hornOn = !hornOn
@@ -168,16 +167,14 @@ func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration)
 func (c *Controller) BlinkHazards() error {
 	c.log.Info("blinking hazards")
 
-	ctx := context.Background()
-
-	if _, err := c.ipc.LPush(ctx, "scooter:blinker", "both"); err != nil {
+	if _, err := c.ipc.LPush("scooter:blinker", "both"); err != nil {
 		c.log.Error("failed to activate hazard lights", "error", err)
 		return err
 	}
 
 	time.Sleep(800 * time.Millisecond)
 
-	if _, err := c.ipc.LPush(ctx, "scooter:blinker", "off"); err != nil {
+	if _, err := c.ipc.LPush("scooter:blinker", "off"); err != nil {
 		c.log.Error("failed to deactivate hazard lights", "error", err)
 		return err
 	}
@@ -187,18 +184,16 @@ func (c *Controller) BlinkHazards() error {
 
 // handleCommand handles a command string
 func (c *Controller) handleCommand(cmd string) {
-	ctx := context.Background()
-
 	switch cmd {
 	case "stop":
 		c.Stop()
 		return
 	case "enable":
-		c.settingsPub.Set(ctx, "alarm.enabled", "true")
+		c.settingsPub.Set("alarm.enabled", "true")
 		c.log.Info("alarm enabled via command")
 		return
 	case "disable":
-		c.settingsPub.Set(ctx, "alarm.enabled", "false")
+		c.settingsPub.Set("alarm.enabled", "false")
 		c.log.Info("alarm disabled via command")
 		return
 	}

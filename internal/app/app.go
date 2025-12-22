@@ -106,20 +106,20 @@ func (a *App) Run(ctx context.Context) error {
 
 	a.subscriber = redis.NewSubscriber(a.redis, a.stateMachine, a.log)
 
-	if err := a.publishInitialStatus(ctx); err != nil {
+	if err := a.publishInitialStatus(); err != nil {
 		a.log.Warn("failed to publish initial BMX status", "error", err)
 	}
 
-	if err := a.handleCLIOverrides(ctx); err != nil {
+	if err := a.handleCLIOverrides(); err != nil {
 		a.log.Warn("failed to handle CLI overrides", "error", err)
 	}
 
-	if err := a.subscriber.Start(ctx); err != nil {
+	if err := a.subscriber.Start(); err != nil {
 		return fmt.Errorf("start subscriber: %w", err)
 	}
 	defer a.subscriber.Stop()
 
-	if err := a.subscriber.CheckBMXInitialized(ctx); err != nil {
+	if err := a.subscriber.CheckBMXInitialized(); err != nil {
 		a.log.Warn("failed to check BMX initialized state", "error", err)
 	}
 
@@ -173,9 +173,9 @@ func (a *App) closeBMXHardware() {
 }
 
 // publishInitialStatus publishes initial BMX status to Redis using HashPublisher
-func (a *App) publishInitialStatus(ctx context.Context) error {
+func (a *App) publishInitialStatus() error {
 	bmxPub := a.redis.IPC().NewHashPublisher("bmx")
-	return bmxPub.SetMany(ctx, map[string]any{
+	return bmxPub.SetMany(map[string]any{
 		"initialized": "true",
 		"interrupt":   "disabled",
 		"sensitivity": "none",
@@ -184,7 +184,7 @@ func (a *App) publishInitialStatus(ctx context.Context) error {
 }
 
 // handleCLIOverrides handles CLI flag overrides for settings
-func (a *App) handleCLIOverrides(ctx context.Context) error {
+func (a *App) handleCLIOverrides() error {
 	settingsPub := a.redis.IPC().NewHashPublisher("settings")
 
 	if a.cfg.HornFlagSet {
@@ -193,7 +193,7 @@ func (a *App) handleCLIOverrides(ctx context.Context) error {
 		if a.cfg.HornEnabled {
 			hornValue = "true"
 		}
-		if err := settingsPub.Set(ctx, "alarm.honk", hornValue); err != nil {
+		if err := settingsPub.Set("alarm.honk", hornValue); err != nil {
 			return fmt.Errorf("failed to set alarm.honk: %w", err)
 		}
 	}
@@ -201,7 +201,7 @@ func (a *App) handleCLIOverrides(ctx context.Context) error {
 	if a.cfg.DurationFlagSet {
 		a.log.Info("duration flag set, writing to Redis", "duration", a.cfg.AlarmDuration)
 		durationValue := fmt.Sprintf("%d", a.cfg.AlarmDuration)
-		if err := settingsPub.Set(ctx, "alarm.duration", durationValue); err != nil {
+		if err := settingsPub.Set("alarm.duration", durationValue); err != nil {
 			return fmt.Errorf("failed to set alarm.duration: %w", err)
 		}
 	}

@@ -10,10 +10,10 @@ import (
 
 // Mock implementations for testing
 type mockBMXClient struct {
-	sensitivity       Sensitivity
-	interruptPin      InterruptPin
-	interruptEnabled  bool
-	resetCalled       int
+	sensitivity      Sensitivity
+	interruptPin     InterruptPin
+	interruptEnabled bool
+	resetCalled      int
 }
 
 func (m *mockBMXClient) SetSensitivity(ctx context.Context, sens Sensitivity) error {
@@ -45,7 +45,7 @@ type mockStatusPublisher struct {
 	lastStatus string
 }
 
-func (m *mockStatusPublisher) PublishStatus(ctx context.Context, status string) error {
+func (m *mockStatusPublisher) PublishStatus(status string) error {
 	m.lastStatus = status
 	return nil
 }
@@ -68,10 +68,10 @@ func (m *mockSuspendInhibitor) Release() error {
 }
 
 type mockAlarmController struct {
-	active       bool
-	duration     time.Duration
-	hornEnabled  bool
-	blinkCalled  int
+	active      bool
+	duration    time.Duration
+	hornEnabled bool
+	blinkCalled int
 }
 
 func (m *mockAlarmController) Start(duration time.Duration) error {

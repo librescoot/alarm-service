@@ -1,7 +1,6 @@
 package redis
 
 import (
-	"context"
 	"fmt"
 
 	ipc "github.com/librescoot/redis-ipc"
@@ -22,16 +21,16 @@ func NewPublisher(client *Client) *Publisher {
 }
 
 // PublishStatus publishes alarm status using HashPublisher
-func (p *Publisher) PublishStatus(ctx context.Context, status string) error {
-	if err := p.alarmPub.Set(ctx, "status", status); err != nil {
+func (p *Publisher) PublishStatus(status string) error {
+	if err := p.alarmPub.Set("status", status); err != nil {
 		return fmt.Errorf("failed to publish alarm status: %w", err)
 	}
 	return nil
 }
 
 // PublishInterrupt publishes a BMX interrupt event to channel
-func (p *Publisher) PublishInterrupt(ctx context.Context, payload string) error {
-	if _, err := p.ipc.Publish(ctx, "bmx:interrupt", payload); err != nil {
+func (p *Publisher) PublishInterrupt(payload string) error {
+	if _, err := p.ipc.Publish("bmx:interrupt", payload); err != nil {
 		return fmt.Errorf("failed to publish bmx interrupt: %w", err)
 	}
 	return nil

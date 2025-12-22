@@ -1,7 +1,6 @@
 package redis
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 
@@ -73,7 +72,7 @@ func (s *Subscriber) setupSettingsWatcher() {
 		s.log.Debug("alarm enabled changed", "enabled", enabled)
 
 		if enabled {
-			vehicleState, err := s.vehicleWatcher.Fetch(context.Background(), "state")
+			vehicleState, err := s.vehicleWatcher.Fetch("state")
 			if err == nil {
 				state := fsm.ParseVehicleState(vehicleState)
 				s.log.Debug("sending current vehicle state before alarm enable", "state", state.String())
@@ -105,14 +104,14 @@ func (s *Subscriber) setupSettingsWatcher() {
 }
 
 // Start starts all watchers with initial state sync
-func (s *Subscriber) Start(ctx context.Context) error {
+func (s *Subscriber) Start() error {
 	s.log.Info("starting hash watchers with initial sync")
 
-	if err := s.vehicleWatcher.StartWithSync(ctx); err != nil {
+	if err := s.vehicleWatcher.StartWithSync(); err != nil {
 		return fmt.Errorf("failed to start vehicle watcher: %w", err)
 	}
 
-	if err := s.settingsWatcher.StartWithSync(ctx); err != nil {
+	if err := s.settingsWatcher.StartWithSync(); err != nil {
 		return fmt.Errorf("failed to start settings watcher: %w", err)
 	}
 
@@ -134,8 +133,8 @@ func (s *Subscriber) Start(ctx context.Context) error {
 }
 
 // CheckBMXInitialized checks if BMX service is already initialized
-func (s *Subscriber) CheckBMXInitialized(ctx context.Context) error {
-	bmxInitialized, err := s.ipc.HGet(ctx, "bmx", "initialized")
+func (s *Subscriber) CheckBMXInitialized() error {
+	bmxInitialized, err := s.ipc.HGet("bmx", "initialized")
 	if err == nil && bmxInitialized == "true" {
 		s.log.Info("BMX service already initialized")
 		s.sm.SendEvent(fsm.InitCompleteEvent{})
