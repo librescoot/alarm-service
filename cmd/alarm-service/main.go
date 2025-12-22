@@ -60,13 +60,13 @@ func main() {
 		"horn_enabled", *hornEnabled)
 
 	application := app.New(&app.Config{
-		I2CBus:           *i2cBus,
-		RedisAddr:        *redisAddr,
-		Logger:           logger,
-		AlarmDuration:    *alarmDuration,
-		DurationFlagSet:  durationFlagSet,
-		HornEnabled:      *hornEnabled,
-		HornFlagSet:      hornFlagSet,
+		I2CBus:          *i2cBus,
+		RedisAddr:       *redisAddr,
+		Logger:          logger,
+		AlarmDuration:   *alarmDuration,
+		DurationFlagSet: durationFlagSet,
+		HornEnabled:     *hornEnabled,
+		HornFlagSet:     hornFlagSet,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
