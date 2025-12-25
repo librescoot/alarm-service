@@ -44,7 +44,7 @@ func (s *Subscriber) setupVehicleWatcher() {
 		return nil
 	})
 
-	s.vehicleWatcher.OnField("seatbox:opened", func(value string) error {
+	s.vehicleWatcher.OnEvent("seatbox:opened", func() error {
 		s.log.Info("authorized seatbox opening detected")
 		s.sm.SendEvent(fsm.SeatboxOpenedEvent{})
 		return nil
