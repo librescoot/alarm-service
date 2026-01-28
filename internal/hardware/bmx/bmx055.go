@@ -3,10 +3,14 @@ package bmx
 import (
 	"fmt"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
+
+// i2cTimeout is the maximum time to wait for an I2C operation
+const i2cTimeout = 500 * time.Millisecond
 
 // I2C addresses for BMX055 sensors
 const (
@@ -156,48 +160,76 @@ func (d *i2cDevice) Close() error {
 
 // ReadByteData reads a byte from a register using SMBus protocol
 func (d *i2cDevice) ReadByteData(reg byte) (byte, error) {
-	var dataBlock [34]byte
-	data := &smbusIoctlData{
-		readWrite: I2C_SMBUS_READ,
-		command:   reg,
-		size:      I2C_SMBUS_BYTE_DATA,
-		data:      &dataBlock,
+	type result struct {
+		val byte
+		err error
 	}
+	done := make(chan result, 1)
 
-	_, _, errno := syscall.Syscall(
-		syscall.SYS_IOCTL,
-		uintptr(d.fd),
-		I2C_SMBUS,
-		uintptr(unsafe.Pointer(data)),
-	)
+	go func() {
+		var dataBlock [34]byte
+		data := &smbusIoctlData{
+			readWrite: I2C_SMBUS_READ,
+			command:   reg,
+			size:      I2C_SMBUS_BYTE_DATA,
+			data:      &dataBlock,
+		}
 
-	if errno != 0 {
-		return 0, fmt.Errorf("I2C_SMBUS read failed: %v", errno)
+		_, _, errno := syscall.Syscall(
+			syscall.SYS_IOCTL,
+			uintptr(d.fd),
+			I2C_SMBUS,
+			uintptr(unsafe.Pointer(data)),
+		)
+
+		if errno != 0 {
+			done <- result{0, fmt.Errorf("I2C_SMBUS read failed: %v", errno)}
+		} else {
+			done <- result{dataBlock[0], nil}
+		}
+	}()
+
+	select {
+	case r := <-done:
+		return r.val, r.err
+	case <-time.After(i2cTimeout):
+		return 0, fmt.Errorf("I2C read timeout after %v", i2cTimeout)
 	}
-	return dataBlock[0], nil
 }
 
 // WriteByteData writes a byte to a register using SMBus protocol
 func (d *i2cDevice) WriteByteData(reg, value byte) error {
-	var dataBlock [34]byte
-	dataBlock[0] = value
+	done := make(chan error, 1)
 
-	data := &smbusIoctlData{
-		readWrite: I2C_SMBUS_WRITE,
-		command:   reg,
-		size:      I2C_SMBUS_BYTE_DATA,
-		data:      &dataBlock,
+	go func() {
+		var dataBlock [34]byte
+		dataBlock[0] = value
+
+		data := &smbusIoctlData{
+			readWrite: I2C_SMBUS_WRITE,
+			command:   reg,
+			size:      I2C_SMBUS_BYTE_DATA,
+			data:      &dataBlock,
+		}
+
+		_, _, errno := syscall.Syscall(
+			syscall.SYS_IOCTL,
+			uintptr(d.fd),
+			I2C_SMBUS,
+			uintptr(unsafe.Pointer(data)),
+		)
+
+		if errno != 0 {
+			done <- fmt.Errorf("I2C_SMBUS write failed: %v", errno)
+		} else {
+			done <- nil
+		}
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(i2cTimeout):
+		return fmt.Errorf("I2C write timeout after %v", i2cTimeout)
 	}
-
-	_, _, errno := syscall.Syscall(
-		syscall.SYS_IOCTL,
-		uintptr(d.fd),
-		I2C_SMBUS,
-		uintptr(unsafe.Pointer(data)),
-	)
-
-	if errno != 0 {
-		return fmt.Errorf("I2C_SMBUS write failed: %v", errno)
-	}
-	return nil
 }
