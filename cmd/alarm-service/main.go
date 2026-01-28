@@ -24,12 +24,16 @@ func main() {
 	alarmDuration := flag.Int("alarm-duration", 10, "Alarm duration in seconds")
 	hornEnabled := flag.Bool("horn-enabled", false, "Enable horn during alarm")
 	seatboxTrigger := flag.Bool("seatbox-trigger", true, "Trigger alarm on unauthorized seatbox opening")
+	hairTrigger := flag.Bool("hair-trigger", false, "Enable hair trigger mode (immediate short alarm on first motion)")
+	hairTriggerDuration := flag.Int("hair-trigger-duration", 3, "Hair trigger alarm duration in seconds")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
 	hornFlagSet := false
 	durationFlagSet := false
 	seatboxTriggerFlagSet := false
+	hairTriggerFlagSet := false
+	hairTriggerDurationFlagSet := false
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "horn-enabled" {
 			hornFlagSet = true
@@ -39,6 +43,12 @@ func main() {
 		}
 		if f.Name == "seatbox-trigger" {
 			seatboxTriggerFlagSet = true
+		}
+		if f.Name == "hair-trigger" {
+			hairTriggerFlagSet = true
+		}
+		if f.Name == "hair-trigger-duration" {
+			hairTriggerDurationFlagSet = true
 		}
 	})
 
@@ -63,18 +73,24 @@ func main() {
 		"log_level", *logLevel,
 		"alarm_duration", *alarmDuration,
 		"horn_enabled", *hornEnabled,
-		"seatbox_trigger", *seatboxTrigger)
+		"seatbox_trigger", *seatboxTrigger,
+		"hair_trigger", *hairTrigger,
+		"hair_trigger_duration", *hairTriggerDuration)
 
 	application := app.New(&app.Config{
-		I2CBus:                *i2cBus,
-		RedisAddr:             *redisAddr,
-		Logger:                logger,
-		AlarmDuration:         *alarmDuration,
-		DurationFlagSet:       durationFlagSet,
-		HornEnabled:           *hornEnabled,
-		HornFlagSet:           hornFlagSet,
-		SeatboxTrigger:        *seatboxTrigger,
-		SeatboxTriggerFlagSet: seatboxTriggerFlagSet,
+		I2CBus:                     *i2cBus,
+		RedisAddr:                  *redisAddr,
+		Logger:                     logger,
+		AlarmDuration:              *alarmDuration,
+		DurationFlagSet:            durationFlagSet,
+		HornEnabled:                *hornEnabled,
+		HornFlagSet:                hornFlagSet,
+		SeatboxTrigger:             *seatboxTrigger,
+		SeatboxTriggerFlagSet:      seatboxTriggerFlagSet,
+		HairTrigger:                *hairTrigger,
+		HairTriggerFlagSet:         hairTriggerFlagSet,
+		HairTriggerDuration:        *hairTriggerDuration,
+		HairTriggerDurationFlagSet: hairTriggerDurationFlagSet,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

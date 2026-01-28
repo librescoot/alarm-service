@@ -31,6 +31,20 @@ type AlarmDurationChangedEvent struct {
 
 func (e AlarmDurationChangedEvent) Type() string { return "alarm_duration_changed" }
 
+// HairTriggerSettingChangedEvent signals hair trigger mode enabled/disabled
+type HairTriggerSettingChangedEvent struct {
+	Enabled bool
+}
+
+func (e HairTriggerSettingChangedEvent) Type() string { return "hair_trigger_setting_changed" }
+
+// HairTriggerDurationChangedEvent signals hair trigger duration changed
+type HairTriggerDurationChangedEvent struct {
+	Duration int
+}
+
+func (e HairTriggerDurationChangedEvent) Type() string { return "hair_trigger_duration_changed" }
+
 // VehicleStateChangedEvent signals vehicle state change
 type VehicleStateChangedEvent struct {
 	State VehicleState

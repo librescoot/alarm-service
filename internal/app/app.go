@@ -18,15 +18,19 @@ import (
 
 // Config holds application configuration
 type Config struct {
-	I2CBus                string
-	RedisAddr             string
-	Logger                *slog.Logger
-	AlarmDuration         int
-	DurationFlagSet       bool
-	HornEnabled           bool
-	HornFlagSet           bool
-	SeatboxTrigger        bool
-	SeatboxTriggerFlagSet bool
+	I2CBus                     string
+	RedisAddr                  string
+	Logger                     *slog.Logger
+	AlarmDuration              int
+	DurationFlagSet            bool
+	HornEnabled                bool
+	HornFlagSet                bool
+	SeatboxTrigger             bool
+	SeatboxTriggerFlagSet      bool
+	HairTrigger                bool
+	HairTriggerFlagSet         bool
+	HairTriggerDuration        int
+	HairTriggerDurationFlagSet bool
 }
 
 // App represents the alarm-service application
@@ -216,6 +220,25 @@ func (a *App) handleCLIOverrides() error {
 		}
 		if err := settingsPub.Set("alarm.seatbox-trigger", seatboxValue); err != nil {
 			return fmt.Errorf("failed to set alarm.seatbox-trigger: %w", err)
+		}
+	}
+
+	if a.cfg.HairTriggerFlagSet {
+		a.log.Info("hair-trigger flag set, writing to Redis", "enabled", a.cfg.HairTrigger)
+		value := "false"
+		if a.cfg.HairTrigger {
+			value = "true"
+		}
+		if err := settingsPub.Set("alarm.hairtrigger", value); err != nil {
+			return fmt.Errorf("failed to set alarm.hairtrigger: %w", err)
+		}
+	}
+
+	if a.cfg.HairTriggerDurationFlagSet {
+		a.log.Info("hair-trigger-duration flag set, writing to Redis", "duration", a.cfg.HairTriggerDuration)
+		value := fmt.Sprintf("%d", a.cfg.HairTriggerDuration)
+		if err := settingsPub.Set("alarm.hairtrigger-duration", value); err != nil {
+			return fmt.Errorf("failed to set alarm.hairtrigger-duration: %w", err)
 		}
 	}
 

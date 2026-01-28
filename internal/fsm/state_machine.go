@@ -94,14 +94,16 @@ type StateMachine struct {
 	inhibitor       SuspendInhibitor
 	alarmController AlarmController
 
-	timers            map[string]*time.Timer
-	alarmEnabled      bool
-	vehicleStandby    bool
-	level2Cycles      int
-	requestDisarm     bool
-	alarmDuration     int
-	preSeatboxState   State
-	seatboxLockClosed bool
+	timers               map[string]*time.Timer
+	alarmEnabled         bool
+	vehicleStandby       bool
+	level2Cycles         int
+	requestDisarm        bool
+	alarmDuration        int
+	hairTriggerEnabled   bool
+	hairTriggerDuration  int
+	preSeatboxState      State
+	seatboxLockClosed    bool
 }
 
 // BMXClient interface for BMX commands
@@ -142,21 +144,23 @@ func New(
 	log *slog.Logger,
 ) *StateMachine {
 	return &StateMachine{
-		state:             StateInit,
-		events:            make(chan Event, 100),
-		log:               log,
-		bmxClient:         bmx,
-		publisher:         pub,
-		inhibitor:         inh,
-		alarmController:   alarm,
-		timers:            make(map[string]*time.Timer),
-		alarmEnabled:      false,
-		vehicleStandby:    false,
-		level2Cycles:      0,
-		requestDisarm:     false,
-		alarmDuration:     alarmDuration,
-		preSeatboxState:   StateInit,
-		seatboxLockClosed: true,
+		state:               StateInit,
+		events:              make(chan Event, 100),
+		log:                 log,
+		bmxClient:           bmx,
+		publisher:           pub,
+		inhibitor:           inh,
+		alarmController:     alarm,
+		timers:              make(map[string]*time.Timer),
+		alarmEnabled:        false,
+		vehicleStandby:      false,
+		level2Cycles:        0,
+		requestDisarm:       false,
+		alarmDuration:       alarmDuration,
+		hairTriggerEnabled:  false,
+		hairTriggerDuration: 3,
+		preSeatboxState:     StateInit,
+		seatboxLockClosed:   true,
 	}
 }
 
@@ -206,6 +210,18 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 	if e, ok := event.(AlarmDurationChangedEvent); ok {
 		sm.alarmDuration = e.Duration
 		sm.log.Info("alarm duration updated", "duration", e.Duration)
+		return
+	}
+
+	if e, ok := event.(HairTriggerSettingChangedEvent); ok {
+		sm.hairTriggerEnabled = e.Enabled
+		sm.log.Info("hair trigger setting updated", "enabled", e.Enabled)
+		return
+	}
+
+	if e, ok := event.(HairTriggerDurationChangedEvent); ok {
+		sm.hairTriggerDuration = e.Duration
+		sm.log.Info("hair trigger duration updated", "duration", e.Duration)
 		return
 	}
 

@@ -129,15 +129,25 @@ func (c *Controller) stopUnsafe() error {
 	return nil
 }
 
-// runHornPattern runs the horn on/off pattern
+// runHornPattern runs the horn on/off pattern with integral cycles.
+// Each cycle is 800ms (400ms on + 400ms off). The pattern runs for
+// the number of complete cycles that fit within the given duration.
 func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration) {
-	c.log.Info("starting horn pattern", "duration", duration)
+	const cycleDuration = 800 * time.Millisecond
+	const buffer = 200 * time.Millisecond
+	cycles := int((duration - buffer) / cycleDuration)
+	if cycles < 1 {
+		cycles = 1
+	}
+	actualDuration := time.Duration(cycles) * cycleDuration
+
+	c.log.Info("starting horn pattern", "duration", duration, "cycles", cycles, "actual_duration", actualDuration)
 
 	ticker := time.NewTicker(400 * time.Millisecond)
 	defer ticker.Stop()
 
-	timeout := time.After(duration)
-	hornOn := true
+	ticks := 0
+	totalTicks := cycles * 2 // 2 ticks per cycle (on + off)
 
 	for {
 		select {
@@ -145,20 +155,20 @@ func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration)
 			c.log.Info("horn pattern cancelled")
 			return
 
-		case <-timeout:
-			c.log.Info("alarm duration expired")
-			c.Stop()
-			return
-
 		case <-ticker.C:
 			if c.hornEnabled {
-				if hornOn {
+				if ticks%2 == 0 {
 					_, _ = c.ipc.LPush("scooter:horn", "on")
 				} else {
 					_, _ = c.ipc.LPush("scooter:horn", "off")
 				}
 			}
-			hornOn = !hornOn
+			ticks++
+			if ticks >= totalTicks {
+				c.log.Info("alarm duration expired", "cycles", cycles)
+				c.Stop()
+				return
+			}
 		}
 	}
 }

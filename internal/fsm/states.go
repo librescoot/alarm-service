@@ -112,6 +112,11 @@ func (sm *StateMachine) onEnterTriggerLevel1Wait(ctx context.Context) {
 		sm.log.Error("failed to blink hazards", "error", err)
 	}
 
+	if sm.hairTriggerEnabled {
+		sm.log.Info("hair trigger active, starting short alarm", "duration", sm.hairTriggerDuration)
+		sm.alarmController.Start(time.Duration(sm.hairTriggerDuration) * time.Second)
+	}
+
 	sm.startTimer("level1_cooldown", 15*time.Second, func() {
 		sm.SendEvent(Level1CooldownTimerEvent{})
 	})
@@ -120,6 +125,7 @@ func (sm *StateMachine) onEnterTriggerLevel1Wait(ctx context.Context) {
 // onExitTriggerLevel1Wait handles exit from trigger_level_1_wait state
 func (sm *StateMachine) onExitTriggerLevel1Wait(ctx context.Context) {
 	sm.stopTimer("level1_cooldown")
+	sm.alarmController.Stop()
 }
 
 // onEnterTriggerLevel1 handles entry to trigger_level_1 state

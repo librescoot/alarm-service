@@ -116,6 +116,24 @@ func (s *Subscriber) setupSettingsWatcher() {
 		s.seatboxTriggerEnabled = enabled
 		return nil
 	})
+
+	s.settingsWatcher.OnField("alarm.hairtrigger", func(hairTrigger string) error {
+		enabled := hairTrigger == "true"
+		s.log.Debug("hair trigger setting changed", "enabled", enabled)
+		s.sm.SendEvent(fsm.HairTriggerSettingChangedEvent{Enabled: enabled})
+		return nil
+	})
+
+	s.settingsWatcher.OnField("alarm.hairtrigger-duration", func(durationStr string) error {
+		var duration int
+		if _, err := fmt.Sscanf(durationStr, "%d", &duration); err != nil {
+			s.log.Error("invalid alarm.hairtrigger-duration value", "value", durationStr, "error", err)
+			return nil
+		}
+		s.log.Debug("hair trigger duration changed", "duration", duration)
+		s.sm.SendEvent(fsm.HairTriggerDurationChangedEvent{Duration: duration})
+		return nil
+	})
 }
 
 // Start starts all watchers with initial state sync
