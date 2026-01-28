@@ -72,21 +72,30 @@ func ParseSensitivity(s string) Sensitivity {
 	}
 }
 
-// GetThreshold returns the threshold value for a given sensitivity
+// GetThreshold returns the slow/no-motion threshold for register 0x29.
+// Per BMX055 datasheet (BST-BMX055-DS000), 1 LSB = 3.91 mg in 2g range.
+// Values were empirically tuned for vehicle motion detection:
+//   - Low (0x10=16):  16 × 3.91 mg = ~63 mg - minimal sensitivity, ignores small bumps
+//   - Medium (0x09=9): 9 × 3.91 mg = ~35 mg - balanced for typical use
+//   - High (0x08=8):   8 × 3.91 mg = ~31 mg - detects subtle movement
 func (s Sensitivity) GetThreshold() byte {
 	switch s {
 	case SensitivityLow:
-		return 0x10
+		return 0x10 // ~63 mg
 	case SensitivityMedium:
-		return 0x09
+		return 0x09 // ~35 mg
 	case SensitivityHigh:
-		return 0x08
+		return 0x08 // ~31 mg
 	default:
 		return 0x09
 	}
 }
 
-// GetDuration returns the duration value for a given sensitivity
+// GetDuration returns the slow/no-motion duration for register 0x27.
+// Per BMX055 datasheet, in slow-motion mode this sets the number of
+// consecutive samples (N = dur + 1) that must exceed threshold.
+// Duration 0x01 means 2 consecutive samples required, providing
+// basic debouncing while maintaining quick response.
 func (s Sensitivity) GetDuration() byte {
-	return 0x01
+	return 0x01 // 2 consecutive samples
 }
