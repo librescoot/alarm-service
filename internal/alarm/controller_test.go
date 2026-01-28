@@ -37,8 +37,8 @@ func setupTestController(t *testing.T, hornEnabled bool) (*Controller, *ipc.Clie
 		ctx:         ctx,
 		log:         log,
 		active:      false,
-		hornEnabled: hornEnabled,
 	}
+	c.hornEnabled.Store(hornEnabled)
 
 	return c, client
 }
@@ -55,8 +55,9 @@ func TestController_BlinkHazards(t *testing.T) {
 		t.Fatalf("BlinkHazards failed: %v", err)
 	}
 
-	if duration < 600*time.Millisecond {
-		t.Errorf("BlinkHazards should take at least 600ms, took %v", duration)
+	// BlinkHazards is now async - it should return quickly
+	if duration > 100*time.Millisecond {
+		t.Errorf("BlinkHazards should return quickly (async), took %v", duration)
 	}
 }
 

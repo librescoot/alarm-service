@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"alarm-service/internal/hardware/bmx"
@@ -16,7 +17,7 @@ type InterruptPoller struct {
 	gyro      *bmx.Gyroscope
 	publisher *redis.Publisher
 	log       *slog.Logger
-	enabled   bool
+	enabled   atomic.Bool
 }
 
 // NewInterruptPoller creates a new InterruptPoller
@@ -31,19 +32,18 @@ func NewInterruptPoller(
 		gyro:      gyro,
 		publisher: publisher,
 		log:       log,
-		enabled:   false,
 	}
 }
 
 // Enable enables interrupt monitoring
 func (p *InterruptPoller) Enable() {
-	p.enabled = true
+	p.enabled.Store(true)
 	p.log.Info("interrupt monitoring enabled")
 }
 
 // Disable disables interrupt monitoring
 func (p *InterruptPoller) Disable() {
-	p.enabled = false
+	p.enabled.Store(false)
 	p.log.Info("interrupt monitoring disabled")
 }
 
@@ -61,7 +61,7 @@ func (p *InterruptPoller) Run(ctx context.Context) {
 			return
 
 		case <-ticker.C:
-			if p.enabled {
+			if p.enabled.Load() {
 				if err := p.checkInterrupt(ctx); err != nil {
 					p.log.Error("failed to check interrupt", "error", err)
 				}

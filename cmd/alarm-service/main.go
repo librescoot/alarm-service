@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -11,11 +12,7 @@ import (
 	"alarm-service/internal/app"
 )
 
-var (
-	version     = "dev"
-	gitRevision = "unknown"
-	buildTime   = "unknown"
-)
+var version = "dev"
 
 func main() {
 	i2cBus := flag.String("i2c-bus", "/dev/i2c-3", "I2C bus device path")
@@ -63,9 +60,7 @@ func main() {
 	})
 
 	if *versionFlag {
-		println("alarm-service")
-		println("  Revision:", gitRevision)
-		println("  Built:", buildTime)
+		fmt.Printf("alarm-service %s\n", version)
 		os.Exit(0)
 	}
 
@@ -76,8 +71,6 @@ func main() {
 	slog.SetDefault(logger)
 
 	logger.Info("librescoot-alarm "+version+" starting",
-		"revision", gitRevision,
-		"build_time", buildTime,
 		"i2c_bus", *i2cBus,
 		"redis", *redisAddr,
 		"log_level", *logLevel,

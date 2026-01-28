@@ -25,6 +25,7 @@ func (sm *StateMachine) onEnterWaitingEnabled(ctx context.Context) {
 
 	sm.configureBMX(ctx, InterruptPinINT2, SensitivityLow)
 	sm.inhibitor.Release()
+	sm.level2Cycles = 0
 }
 
 // onEnterDisarmed handles entry to disarmed state
@@ -41,6 +42,7 @@ func (sm *StateMachine) onEnterDisarmed(ctx context.Context) {
 
 	sm.configureBMX(ctx, InterruptPinNone, SensitivityLow)
 	sm.inhibitor.Release()
+	sm.level2Cycles = 0
 }
 
 // onEnterDelayArmed handles entry to delay_armed state
@@ -81,18 +83,6 @@ func (sm *StateMachine) onEnterArmed(ctx context.Context) {
 	if err := sm.bmxClient.EnableInterrupt(ctx); err != nil {
 		sm.log.Error("failed to enable interrupt", "error", err)
 	}
-
-	sm.startTimer("check_level_1", 1*time.Second, func() {
-		sm.SendEvent(Level1CheckTimerEvent{})
-		sm.startTimer("check_level_1", 1*time.Second, func() {
-			sm.SendEvent(Level1CheckTimerEvent{})
-		})
-	})
-}
-
-// onExitArmed handles exit from armed state
-func (sm *StateMachine) onExitArmed(ctx context.Context) {
-	sm.stopTimer("check_level_1")
 }
 
 // onEnterTriggerLevel1Wait handles entry to trigger_level_1_wait state
@@ -184,8 +174,8 @@ func (sm *StateMachine) onEnterWaitingMovement(ctx context.Context) {
 	sm.alarmController.Start(time.Duration(sm.alarmDuration) * time.Second)
 
 	sm.startTimer("chip_setup", 47*time.Second, func() {
-		sm.configureBMX(context.Background(), InterruptPinNone, SensitivityHigh)
-		if err := sm.bmxClient.EnableInterrupt(context.Background()); err != nil {
+		sm.configureBMX(sm.ctx, InterruptPinNone, SensitivityHigh)
+		if err := sm.bmxClient.EnableInterrupt(sm.ctx); err != nil {
 			sm.log.Error("failed to enable interrupt", "error", err)
 		}
 	})

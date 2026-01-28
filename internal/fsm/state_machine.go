@@ -88,6 +88,7 @@ type StateMachine struct {
 	state  State
 	events chan Event
 	log    *slog.Logger
+	ctx    context.Context
 
 	bmxClient       BMXClient
 	publisher       StatusPublisher
@@ -169,6 +170,7 @@ func New(
 // Run runs the state machine event loop
 func (sm *StateMachine) Run(ctx context.Context) {
 	sm.log.Info("starting state machine")
+	sm.ctx = ctx
 
 	for {
 		select {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	ipc "github.com/librescoot/redis-ipc"
@@ -21,7 +22,7 @@ type Controller struct {
 	log         *slog.Logger
 	mu          sync.Mutex
 	active      bool
-	hornEnabled bool
+	hornEnabled atomic.Bool
 }
 
 // NewController creates a new alarm controller using redis-ipc
@@ -43,8 +44,8 @@ func NewController(redisAddr string, hornEnabled bool, log *slog.Logger) (*Contr
 		ctx:         ctx,
 		log:         log,
 		active:      false,
-		hornEnabled: hornEnabled,
 	}
+	c.hornEnabled.Store(hornEnabled)
 
 	c.cmdHandler = ipc.HandleRequests(client, "scooter:alarm", func(cmd string) error {
 		c.log.Info("received alarm command", "command", cmd)
@@ -66,9 +67,7 @@ func (c *Controller) Close() error {
 
 // SetHornEnabled updates the horn enabled setting
 func (c *Controller) SetHornEnabled(enabled bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.hornEnabled = enabled
+	c.hornEnabled.Store(enabled)
 	c.log.Info("horn setting updated", "enabled", enabled)
 }
 
@@ -118,7 +117,7 @@ func (c *Controller) stopUnsafe() error {
 		c.cancel()
 	}
 
-	if c.hornEnabled {
+	if c.hornEnabled.Load() {
 		c.ipc.LPush("scooter:horn", "off")
 	}
 	c.ipc.LPush("scooter:blinker", "off")
@@ -156,7 +155,7 @@ func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration)
 			return
 
 		case <-ticker.C:
-			if c.hornEnabled {
+			if c.hornEnabled.Load() {
 				if ticks%2 == 0 {
 					_, _ = c.ipc.LPush("scooter:horn", "on")
 				} else {
@@ -176,6 +175,7 @@ func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration)
 // BlinkHazards briefly flashes the hazard lights once.
 // The blink fade animation completes at 504ms, so we send "off" at 600ms
 // to avoid cutting off the fade while the LED is still visible.
+// This function is non-blocking to avoid stalling the FSM event loop.
 func (c *Controller) BlinkHazards() error {
 	c.log.Info("blinking hazards")
 
@@ -184,12 +184,12 @@ func (c *Controller) BlinkHazards() error {
 		return err
 	}
 
-	time.Sleep(600 * time.Millisecond)
-
-	if _, err := c.ipc.LPush("scooter:blinker", "off"); err != nil {
-		c.log.Error("failed to deactivate hazard lights", "error", err)
-		return err
-	}
+	go func() {
+		time.Sleep(600 * time.Millisecond)
+		if _, err := c.ipc.LPush("scooter:blinker", "off"); err != nil {
+			c.log.Error("failed to deactivate hazard lights", "error", err)
+		}
+	}()
 
 	return nil
 }

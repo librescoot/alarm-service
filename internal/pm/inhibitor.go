@@ -46,12 +46,9 @@ func (i *Inhibitor) Acquire(reason string) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	if i.hasLock {
-		if i.lastReason == reason {
-			i.log.Debug("already have inhibitor lock", "reason", reason)
-			return nil
-		}
-		i.releaseUnsafe()
+	if i.hasLock && i.lastReason == reason {
+		i.log.Debug("already have inhibitor lock", "reason", reason)
+		return nil
 	}
 
 	obj := i.conn.Object("org.freedesktop.login1", "/org/freedesktop/login1")
@@ -66,10 +63,19 @@ func (i *Inhibitor) Acquire(reason string) error {
 		return fmt.Errorf("failed to acquire inhibitor lock: %w", call.Err)
 	}
 
-	if err := call.Store(&i.fd); err != nil {
+	var newFd dbus.UnixFD
+	if err := call.Store(&newFd); err != nil {
 		return fmt.Errorf("failed to store inhibitor fd: %w", err)
 	}
 
+	// Release old lock only after successfully acquiring new one
+	if i.hasLock {
+		if err := syscall.Close(int(i.fd)); err != nil {
+			i.log.Warn("error closing old inhibitor fd", "error", err)
+		}
+	}
+
+	i.fd = newFd
 	i.hasLock = true
 	i.lastReason = reason
 	i.log.Info("acquired suspend inhibitor", "reason", reason)

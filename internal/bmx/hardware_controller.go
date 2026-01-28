@@ -91,15 +91,20 @@ func (c *HardwareController) SetInterruptPin(ctx context.Context, pin fsm.Interr
 func (c *HardwareController) SoftReset(ctx context.Context) error {
 	c.log.Info("performing soft reset")
 
+	var errs []error
 	if err := c.accel.SoftReset(); err != nil {
-		c.log.Error("failed to reset accelerometer", "error", err)
+		errs = append(errs, fmt.Errorf("accelerometer: %w", err))
 	}
 
 	if err := c.gyro.SoftReset(); err != nil {
-		c.log.Error("failed to reset gyroscope", "error", err)
+		errs = append(errs, fmt.Errorf("gyroscope: %w", err))
 	}
 
 	time.Sleep(10 * time.Millisecond)
+
+	if len(errs) > 0 {
+		return fmt.Errorf("soft reset failed: %v", errs)
+	}
 	return nil
 }
 

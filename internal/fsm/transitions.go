@@ -214,8 +214,6 @@ func (sm *StateMachine) exitState(ctx context.Context, state State) {
 	switch state {
 	case StateDelayArmed:
 		sm.onExitDelayArmed(ctx)
-	case StateArmed:
-		sm.onExitArmed(ctx)
 	case StateTriggerLevel1Wait:
 		sm.onExitTriggerLevel1Wait(ctx)
 	case StateTriggerLevel1:
