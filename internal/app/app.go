@@ -21,6 +21,8 @@ type Config struct {
 	I2CBus                     string
 	RedisAddr                  string
 	Logger                     *slog.Logger
+	AlarmEnabled               bool
+	AlarmEnabledFlagSet        bool
 	AlarmDuration              int
 	DurationFlagSet            bool
 	HornEnabled                bool
@@ -192,6 +194,17 @@ func (a *App) publishInitialStatus() error {
 // handleCLIOverrides handles CLI flag overrides for settings
 func (a *App) handleCLIOverrides() error {
 	settingsPub := a.redis.IPC().NewHashPublisher("settings")
+
+	if a.cfg.AlarmEnabledFlagSet {
+		a.log.Info("alarm-enabled flag set, writing to Redis", "enabled", a.cfg.AlarmEnabled)
+		value := "false"
+		if a.cfg.AlarmEnabled {
+			value = "true"
+		}
+		if err := settingsPub.Set("alarm.enabled", value); err != nil {
+			return fmt.Errorf("failed to set alarm.enabled: %w", err)
+		}
+	}
 
 	if a.cfg.HornFlagSet {
 		a.log.Info("horn flag set, writing to Redis", "enabled", a.cfg.HornEnabled)

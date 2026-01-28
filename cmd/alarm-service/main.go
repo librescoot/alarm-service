@@ -21,6 +21,7 @@ func main() {
 	i2cBus := flag.String("i2c-bus", "/dev/i2c-3", "I2C bus device path")
 	redisAddr := flag.String("redis", "localhost:6379", "Redis address")
 	logLevel := flag.String("log-level", "info", "Log level: debug, info, warn, error")
+	alarmEnabled := flag.Bool("alarm-enabled", false, "Enable alarm system (writes to Redis on startup)")
 	alarmDuration := flag.Int("alarm-duration", 10, "Alarm duration in seconds")
 	hornEnabled := flag.Bool("horn-enabled", false, "Enable horn during alarm")
 	seatboxTrigger := flag.Bool("seatbox-trigger", true, "Trigger alarm on unauthorized seatbox opening")
@@ -29,12 +30,16 @@ func main() {
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
+	alarmEnabledFlagSet := false
 	hornFlagSet := false
 	durationFlagSet := false
 	seatboxTriggerFlagSet := false
 	hairTriggerFlagSet := false
 	hairTriggerDurationFlagSet := false
 	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "alarm-enabled" {
+			alarmEnabledFlagSet = true
+		}
 		if f.Name == "horn-enabled" {
 			hornFlagSet = true
 		}
@@ -71,6 +76,7 @@ func main() {
 		"i2c_bus", *i2cBus,
 		"redis", *redisAddr,
 		"log_level", *logLevel,
+		"alarm_enabled", *alarmEnabled,
 		"alarm_duration", *alarmDuration,
 		"horn_enabled", *hornEnabled,
 		"seatbox_trigger", *seatboxTrigger,
@@ -81,6 +87,8 @@ func main() {
 		I2CBus:                     *i2cBus,
 		RedisAddr:                  *redisAddr,
 		Logger:                     logger,
+		AlarmEnabled:               *alarmEnabled,
+		AlarmEnabledFlagSet:        alarmEnabledFlagSet,
 		AlarmDuration:              *alarmDuration,
 		DurationFlagSet:            durationFlagSet,
 		HornEnabled:                *hornEnabled,
