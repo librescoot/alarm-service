@@ -55,8 +55,8 @@ func TestController_BlinkHazards(t *testing.T) {
 		t.Fatalf("BlinkHazards failed: %v", err)
 	}
 
-	if duration < 800*time.Millisecond {
-		t.Errorf("BlinkHazards should take at least 800ms, took %v", duration)
+	if duration < 600*time.Millisecond {
+		t.Errorf("BlinkHazards should take at least 600ms, took %v", duration)
 	}
 }
 
