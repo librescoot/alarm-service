@@ -102,6 +102,7 @@ type StateMachine struct {
 	alarmDuration        int
 	hairTriggerEnabled   bool
 	hairTriggerDuration  int
+	l1CooldownDuration   int
 	preSeatboxState      State
 	seatboxLockClosed    bool
 }
@@ -159,6 +160,7 @@ func New(
 		alarmDuration:       alarmDuration,
 		hairTriggerEnabled:  false,
 		hairTriggerDuration: 3,
+		l1CooldownDuration:  15,
 		preSeatboxState:     StateInit,
 		seatboxLockClosed:   true,
 	}
@@ -222,6 +224,12 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 	if e, ok := event.(HairTriggerDurationChangedEvent); ok {
 		sm.hairTriggerDuration = e.Duration
 		sm.log.Info("hair trigger duration updated", "duration", e.Duration)
+		return
+	}
+
+	if e, ok := event.(L1CooldownDurationChangedEvent); ok {
+		sm.l1CooldownDuration = e.Duration
+		sm.log.Info("L1 cooldown duration updated", "duration", e.Duration)
 		return
 	}
 

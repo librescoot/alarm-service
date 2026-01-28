@@ -134,6 +134,17 @@ func (s *Subscriber) setupSettingsWatcher() {
 		s.sm.SendEvent(fsm.HairTriggerDurationChangedEvent{Duration: duration})
 		return nil
 	})
+
+	s.settingsWatcher.OnField("alarm.l1-cooldown", func(durationStr string) error {
+		var duration int
+		if _, err := fmt.Sscanf(durationStr, "%d", &duration); err != nil {
+			s.log.Error("invalid alarm.l1-cooldown value", "value", durationStr, "error", err)
+			return nil
+		}
+		s.log.Debug("L1 cooldown duration changed", "duration", duration)
+		s.sm.SendEvent(fsm.L1CooldownDurationChangedEvent{Duration: duration})
+		return nil
+	})
 }
 
 // Start starts all watchers with initial state sync

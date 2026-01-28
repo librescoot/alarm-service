@@ -27,6 +27,7 @@ func main() {
 	seatboxTrigger := flag.Bool("seatbox-trigger", true, "Trigger alarm on unauthorized seatbox opening")
 	hairTrigger := flag.Bool("hair-trigger", false, "Enable hair trigger mode (immediate short alarm on first motion)")
 	hairTriggerDuration := flag.Int("hair-trigger-duration", 3, "Hair trigger alarm duration in seconds")
+	l1Cooldown := flag.Int("l1-cooldown", 15, "Level 1 cooldown duration in seconds")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
@@ -36,6 +37,7 @@ func main() {
 	seatboxTriggerFlagSet := false
 	hairTriggerFlagSet := false
 	hairTriggerDurationFlagSet := false
+	l1CooldownFlagSet := false
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "alarm-enabled" {
 			alarmEnabledFlagSet = true
@@ -54,6 +56,9 @@ func main() {
 		}
 		if f.Name == "hair-trigger-duration" {
 			hairTriggerDurationFlagSet = true
+		}
+		if f.Name == "l1-cooldown" {
+			l1CooldownFlagSet = true
 		}
 	})
 
@@ -81,7 +86,8 @@ func main() {
 		"horn_enabled", *hornEnabled,
 		"seatbox_trigger", *seatboxTrigger,
 		"hair_trigger", *hairTrigger,
-		"hair_trigger_duration", *hairTriggerDuration)
+		"hair_trigger_duration", *hairTriggerDuration,
+		"l1_cooldown", *l1Cooldown)
 
 	application := app.New(&app.Config{
 		I2CBus:                     *i2cBus,
@@ -99,6 +105,8 @@ func main() {
 		HairTriggerFlagSet:         hairTriggerFlagSet,
 		HairTriggerDuration:        *hairTriggerDuration,
 		HairTriggerDurationFlagSet: hairTriggerDurationFlagSet,
+		L1Cooldown:                 *l1Cooldown,
+		L1CooldownFlagSet:          l1CooldownFlagSet,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

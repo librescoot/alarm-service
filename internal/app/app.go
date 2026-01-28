@@ -33,6 +33,8 @@ type Config struct {
 	HairTriggerFlagSet         bool
 	HairTriggerDuration        int
 	HairTriggerDurationFlagSet bool
+	L1Cooldown                 int
+	L1CooldownFlagSet          bool
 }
 
 // App represents the alarm-service application
@@ -252,6 +254,14 @@ func (a *App) handleCLIOverrides() error {
 		value := fmt.Sprintf("%d", a.cfg.HairTriggerDuration)
 		if err := settingsPub.Set("alarm.hairtrigger-duration", value); err != nil {
 			return fmt.Errorf("failed to set alarm.hairtrigger-duration: %w", err)
+		}
+	}
+
+	if a.cfg.L1CooldownFlagSet {
+		a.log.Info("l1-cooldown flag set, writing to Redis", "duration", a.cfg.L1Cooldown)
+		value := fmt.Sprintf("%d", a.cfg.L1Cooldown)
+		if err := settingsPub.Set("alarm.l1-cooldown", value); err != nil {
+			return fmt.Errorf("failed to set alarm.l1-cooldown: %w", err)
 		}
 	}
 

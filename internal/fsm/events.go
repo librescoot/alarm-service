@@ -45,6 +45,13 @@ type HairTriggerDurationChangedEvent struct {
 
 func (e HairTriggerDurationChangedEvent) Type() string { return "hair_trigger_duration_changed" }
 
+// L1CooldownDurationChangedEvent signals L1 cooldown duration changed
+type L1CooldownDurationChangedEvent struct {
+	Duration int
+}
+
+func (e L1CooldownDurationChangedEvent) Type() string { return "l1_cooldown_duration_changed" }
+
 // VehicleStateChangedEvent signals vehicle state change
 type VehicleStateChangedEvent struct {
 	State VehicleState

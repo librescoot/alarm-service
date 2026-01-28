@@ -97,7 +97,7 @@ func (sm *StateMachine) onExitArmed(ctx context.Context) {
 
 // onEnterTriggerLevel1Wait handles entry to trigger_level_1_wait state
 func (sm *StateMachine) onEnterTriggerLevel1Wait(ctx context.Context) {
-	sm.log.Info("entering trigger_level_1_wait state", "cooldown", "15s")
+	sm.log.Info("entering trigger_level_1_wait state", "cooldown", sm.l1CooldownDuration)
 
 	if err := sm.inhibitor.Acquire("Level 1 cooldown"); err != nil {
 		sm.log.Error("failed to acquire inhibitor", "error", err)
@@ -117,7 +117,7 @@ func (sm *StateMachine) onEnterTriggerLevel1Wait(ctx context.Context) {
 		sm.alarmController.Start(time.Duration(sm.hairTriggerDuration) * time.Second)
 	}
 
-	sm.startTimer("level1_cooldown", 15*time.Second, func() {
+	sm.startTimer("level1_cooldown", time.Duration(sm.l1CooldownDuration)*time.Second, func() {
 		sm.SendEvent(Level1CooldownTimerEvent{})
 	})
 }
