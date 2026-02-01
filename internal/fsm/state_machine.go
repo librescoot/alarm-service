@@ -94,18 +94,20 @@ type StateMachine struct {
 	publisher       StatusPublisher
 	inhibitor       SuspendInhibitor
 	alarmController AlarmController
+	persistence     Persistence
 
-	timers               map[string]*time.Timer
-	alarmEnabled         bool
-	vehicleStandby       bool
-	level2Cycles         int
-	requestDisarm        bool
-	alarmDuration        int
-	hairTriggerEnabled   bool
-	hairTriggerDuration  int
-	l1CooldownDuration   int
-	preSeatboxState      State
-	seatboxLockClosed    bool
+	timers                     map[string]*time.Timer
+	alarmEnabled               bool
+	vehicleStandby             bool
+	level2Cycles               int
+	requestDisarm              bool
+	alarmDuration              int
+	hairTriggerEnabled         bool
+	hairTriggerDuration        int
+	l1CooldownDuration         int
+	preSeatboxState            State
+	seatboxLockClosed          bool
+	wasArmedBeforeHibernation  bool
 }
 
 // BMXClient interface for BMX commands
@@ -142,28 +144,38 @@ func New(
 	pub StatusPublisher,
 	inh SuspendInhibitor,
 	alarm AlarmController,
+	persistence Persistence,
 	alarmDuration int,
 	log *slog.Logger,
 ) *StateMachine {
+	if persistence == nil {
+		persistence = &NopPersistence{}
+	}
+	wasArmed := persistence.WasArmed()
+	if wasArmed {
+		log.Info("detected previous armed state from persistence")
+	}
 	return &StateMachine{
-		state:               StateInit,
-		events:              make(chan Event, 100),
-		log:                 log,
-		bmxClient:           bmx,
-		publisher:           pub,
-		inhibitor:           inh,
-		alarmController:     alarm,
-		timers:              make(map[string]*time.Timer),
-		alarmEnabled:        false,
-		vehicleStandby:      false,
-		level2Cycles:        0,
-		requestDisarm:       false,
-		alarmDuration:       alarmDuration,
-		hairTriggerEnabled:  false,
-		hairTriggerDuration: 3,
-		l1CooldownDuration:  5,
-		preSeatboxState:     StateInit,
-		seatboxLockClosed:   true,
+		state:                     StateInit,
+		events:                    make(chan Event, 100),
+		log:                       log,
+		bmxClient:                 bmx,
+		publisher:                 pub,
+		inhibitor:                 inh,
+		alarmController:           alarm,
+		persistence:               persistence,
+		timers:                    make(map[string]*time.Timer),
+		alarmEnabled:              false,
+		vehicleStandby:            false,
+		level2Cycles:              0,
+		requestDisarm:             false,
+		alarmDuration:             alarmDuration,
+		hairTriggerEnabled:        false,
+		hairTriggerDuration:       3,
+		l1CooldownDuration:        5,
+		preSeatboxState:           StateInit,
+		seatboxLockClosed:         true,
+		wasArmedBeforeHibernation: wasArmed,
 	}
 }
 

@@ -26,6 +26,11 @@ func (sm *StateMachine) onEnterWaitingEnabled(ctx context.Context) {
 	sm.configureBMX(ctx, InterruptPinINT2, SensitivityLow)
 	sm.inhibitor.Release()
 	sm.level2Cycles = 0
+	sm.wasArmedBeforeHibernation = false
+
+	if err := sm.persistence.SaveArmedState(false); err != nil {
+		sm.log.Error("failed to clear armed state", "error", err)
+	}
 }
 
 // onEnterDisarmed handles entry to disarmed state
@@ -43,6 +48,11 @@ func (sm *StateMachine) onEnterDisarmed(ctx context.Context) {
 	sm.configureBMX(ctx, InterruptPinNone, SensitivityLow)
 	sm.inhibitor.Release()
 	sm.level2Cycles = 0
+	sm.wasArmedBeforeHibernation = false
+
+	if err := sm.persistence.SaveArmedState(false); err != nil {
+		sm.log.Error("failed to clear armed state", "error", err)
+	}
 }
 
 // onEnterDelayArmed handles entry to delay_armed state
@@ -82,6 +92,10 @@ func (sm *StateMachine) onEnterArmed(ctx context.Context) {
 
 	if err := sm.bmxClient.EnableInterrupt(ctx); err != nil {
 		sm.log.Error("failed to enable interrupt", "error", err)
+	}
+
+	if err := sm.persistence.SaveArmedState(true); err != nil {
+		sm.log.Error("failed to persist armed state", "error", err)
 	}
 }
 

@@ -162,7 +162,12 @@ func (s *Subscriber) Start() error {
 	s.log.Info("starting BMX interrupt subscription")
 	var err error
 	s.bmxWatcher, err = ipc.Subscribe(s.ipc, "bmx:interrupt", func(payload string) error {
-		s.log.Info("BMX interrupt received")
+		if payload == "wake-hibernation" {
+			s.log.Info("hibernation wake-up interrupt received")
+			s.sm.SendEvent(fsm.HibernationWakeEvent{})
+			return nil
+		}
+		s.log.Info("BMX interrupt received", "payload", payload)
 		s.sm.SendEvent(fsm.BMXInterruptEvent{
 			Timestamp: 0,
 			Data:      payload,

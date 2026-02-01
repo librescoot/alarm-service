@@ -67,6 +67,11 @@ type BMXInterruptEvent struct {
 
 func (e BMXInterruptEvent) Type() string { return "bmx_interrupt" }
 
+// HibernationWakeEvent signals MDB was woken from hibernation by motion
+type HibernationWakeEvent struct{}
+
+func (e HibernationWakeEvent) Type() string { return "hibernation_wake" }
+
 // TemporarilyDisarmEvent signals temporary disarm request
 type TemporarilyDisarmEvent struct{}
 

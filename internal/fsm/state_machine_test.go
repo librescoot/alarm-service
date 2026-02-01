@@ -94,7 +94,24 @@ func (m *mockAlarmController) BlinkHazards() error {
 	return nil
 }
 
+type mockPersistence struct {
+	armed bool
+}
+
+func (m *mockPersistence) SaveArmedState(armed bool) error {
+	m.armed = armed
+	return nil
+}
+
+func (m *mockPersistence) WasArmed() bool {
+	return m.armed
+}
+
 func createTestStateMachine() (*StateMachine, *mockBMXClient, *mockStatusPublisher, *mockSuspendInhibitor, *mockAlarmController) {
+	return createTestStateMachineWithPersistence(&mockPersistence{})
+}
+
+func createTestStateMachineWithPersistence(p Persistence) (*StateMachine, *mockBMXClient, *mockStatusPublisher, *mockSuspendInhibitor, *mockAlarmController) {
 	bmx := &mockBMXClient{}
 	pub := &mockStatusPublisher{}
 	inh := &mockSuspendInhibitor{}
@@ -103,7 +120,7 @@ func createTestStateMachine() (*StateMachine, *mockBMXClient, *mockStatusPublish
 		Level: slog.LevelError,
 	}))
 
-	sm := New(bmx, pub, inh, alarm, 10, log)
+	sm := New(bmx, pub, inh, alarm, p, 10, log)
 	return sm, bmx, pub, inh, alarm
 }
 
@@ -856,5 +873,200 @@ func TestStateMachine_RuntimeArmIgnoredWhenDisabled(t *testing.T) {
 
 	if sm.State() != StateDisarmed {
 		t.Errorf("RuntimeArm with disabled alarm should be ignored, got %s", sm.State())
+	}
+}
+
+func TestStateMachine_WaitingHibernationDoesNotDisarm(t *testing.T) {
+	armedStates := []State{
+		StateDelayArmed,
+		StateArmed,
+		StateTriggerLevel1Wait,
+		StateTriggerLevel1,
+		StateTriggerLevel2,
+		StateWaitingMovement,
+		StateSeatboxAccess,
+	}
+
+	for _, initialState := range armedStates {
+		sm, _, _, _, _ := createTestStateMachine()
+		ctx := context.Background()
+
+		sm.state = initialState
+		sm.vehicleStandby = true
+		sm.alarmEnabled = true
+
+		sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateWaitingHibernation})
+		sm.handleEvent(ctx, <-sm.events)
+
+		if sm.State() != initialState {
+			t.Errorf("expected to stay in %s on waiting-hibernation, got %s", initialState, sm.State())
+		}
+	}
+}
+
+func TestStateMachine_ShuttingDownDoesNotDisarm(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.vehicleStandby = true
+	sm.alarmEnabled = true
+
+	sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateShuttingDown})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateArmed {
+		t.Errorf("expected to stay in StateArmed on shutting-down, got %s", sm.State())
+	}
+}
+
+func TestStateMachine_HibernationWakeFromInit(t *testing.T) {
+	p := &mockPersistence{armed: true}
+	sm, _, _, inh, alarm := createTestStateMachineWithPersistence(p)
+	ctx := context.Background()
+
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+
+	sm.SendEvent(HibernationWakeEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateTriggerLevel1Wait {
+		t.Errorf("expected StateTriggerLevel1Wait on hibernation wake, got %s", sm.State())
+	}
+
+	if !inh.acquired {
+		t.Error("expected suspend inhibitor to be acquired")
+	}
+
+	if alarm.blinkCalled != 1 {
+		t.Errorf("expected hazards to blink once, got %d", alarm.blinkCalled)
+	}
+}
+
+func TestStateMachine_HibernationWakeIgnoredWhenNotArmed(t *testing.T) {
+	p := &mockPersistence{armed: false}
+	sm, _, _, _, _ := createTestStateMachineWithPersistence(p)
+	ctx := context.Background()
+
+	sm.alarmEnabled = true
+
+	sm.SendEvent(HibernationWakeEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateInit {
+		t.Errorf("expected to stay in StateInit when not previously armed, got %s", sm.State())
+	}
+}
+
+func TestStateMachine_HibernationWakeIgnoredWhenAlarmDisabled(t *testing.T) {
+	p := &mockPersistence{armed: true}
+	sm, _, _, _, _ := createTestStateMachineWithPersistence(p)
+	ctx := context.Background()
+
+	sm.alarmEnabled = false
+
+	sm.SendEvent(HibernationWakeEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateInit {
+		t.Errorf("expected to stay in StateInit when alarm disabled, got %s", sm.State())
+	}
+}
+
+func TestStateMachine_HibernationWakeFromDisarmed(t *testing.T) {
+	p := &mockPersistence{armed: true}
+	sm, _, _, _, _ := createTestStateMachineWithPersistence(p)
+	ctx := context.Background()
+
+	sm.state = StateDisarmed
+	sm.alarmEnabled = true
+	sm.wasArmedBeforeHibernation = true
+
+	sm.SendEvent(HibernationWakeEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateTriggerLevel1Wait {
+		t.Errorf("expected StateTriggerLevel1Wait on hibernation wake from disarmed, got %s", sm.State())
+	}
+}
+
+func TestStateMachine_HibernationWakeFromArmed(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+
+	sm.SendEvent(HibernationWakeEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateTriggerLevel1Wait {
+		t.Errorf("expected StateTriggerLevel1Wait on hibernation wake from armed, got %s", sm.State())
+	}
+}
+
+func TestStateMachine_PersistenceOnArmedEntry(t *testing.T) {
+	p := &mockPersistence{}
+	sm, _, _, _, _ := createTestStateMachineWithPersistence(p)
+	ctx := context.Background()
+
+	sm.state = StateDelayArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+
+	sm.SendEvent(DelayArmedTimerEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if !p.armed {
+		t.Error("expected persistence to save armed=true on entering armed state")
+	}
+}
+
+func TestStateMachine_PersistenceClearedOnDisarm(t *testing.T) {
+	p := &mockPersistence{armed: true}
+	sm, _, _, _, _ := createTestStateMachineWithPersistence(p)
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.vehicleStandby = true
+	sm.alarmEnabled = true
+
+	sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateReadyToDrive})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if p.armed {
+		t.Error("expected persistence to save armed=false on entering disarmed state")
+	}
+
+	if sm.wasArmedBeforeHibernation {
+		t.Error("expected wasArmedBeforeHibernation to be cleared on disarm")
+	}
+}
+
+func TestStateMachine_FilePersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := tmpDir + "/alarm-armed"
+	p := NewFilePersistenceWithPath(path)
+
+	if p.WasArmed() {
+		t.Error("expected WasArmed() false initially")
+	}
+
+	if err := p.SaveArmedState(true); err != nil {
+		t.Fatalf("SaveArmedState(true) failed: %v", err)
+	}
+
+	if !p.WasArmed() {
+		t.Error("expected WasArmed() true after save")
+	}
+
+	if err := p.SaveArmedState(false); err != nil {
+		t.Fatalf("SaveArmedState(false) failed: %v", err)
+	}
+
+	if p.WasArmed() {
+		t.Error("expected WasArmed() false after clear")
 	}
 }

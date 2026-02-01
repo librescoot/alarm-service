@@ -2,6 +2,17 @@ package fsm
 
 import "context"
 
+// shouldDisarmForVehicleState returns true if the vehicle state should cause the alarm to disarm.
+// The alarm stays armed for all states except explicit "user unlocked" states.
+func shouldDisarmForVehicleState(state VehicleState) bool {
+	switch state {
+	case VehicleStateParked, VehicleStateReadyToDrive, VehicleStateWaitingSeatbox:
+		return true
+	default:
+		return false
+	}
+}
+
 // getTransition determines the next state based on current state and event
 func (sm *StateMachine) getTransition(event Event) State {
 	switch sm.state {
@@ -11,6 +22,12 @@ func (sm *StateMachine) getTransition(event Event) State {
 		}
 		if e, ok := event.(AlarmModeChangedEvent); ok {
 			sm.alarmEnabled = e.Enabled
+		}
+		if _, ok := event.(HibernationWakeEvent); ok {
+			if sm.wasArmedBeforeHibernation && sm.alarmEnabled {
+				sm.log.Info("hibernation wake in init, fast-tracking to L1")
+				return StateTriggerLevel1Wait
+			}
 		}
 		if _, ok := event.(InitCompleteEvent); ok {
 			if sm.alarmEnabled {
@@ -36,6 +53,12 @@ func (sm *StateMachine) getTransition(event Event) State {
 			sm.vehicleStandby = true
 			return StateDelayArmed
 		}
+		if _, ok := event.(HibernationWakeEvent); ok {
+			if sm.wasArmedBeforeHibernation && sm.alarmEnabled {
+				sm.log.Info("hibernation wake in disarmed, fast-tracking to L1")
+				return StateTriggerLevel1Wait
+			}
+		}
 		if e, ok := event.(AlarmModeChangedEvent); ok && !e.Enabled {
 			sm.alarmEnabled = false
 			return StateWaitingEnabled
@@ -51,7 +74,7 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(UnauthorizedSeatboxEvent); ok {
 			return StateTriggerLevel2
 		}
-		if e, ok := event.(VehicleStateChangedEvent); ok && e.State != VehicleStateStandby {
+		if e, ok := event.(VehicleStateChangedEvent); ok && shouldDisarmForVehicleState(e.State) {
 			sm.vehicleStandby = false
 			return StateDisarmed
 		}
@@ -77,7 +100,10 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(BMXInterruptEvent); ok {
 			return StateTriggerLevel1Wait
 		}
-		if e, ok := event.(VehicleStateChangedEvent); ok && e.State != VehicleStateStandby {
+		if _, ok := event.(HibernationWakeEvent); ok {
+			return StateTriggerLevel1Wait
+		}
+		if e, ok := event.(VehicleStateChangedEvent); ok && shouldDisarmForVehicleState(e.State) {
 			sm.vehicleStandby = false
 			return StateDisarmed
 		}
@@ -103,7 +129,7 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(Level1CooldownTimerEvent); ok {
 			return StateTriggerLevel1
 		}
-		if e, ok := event.(VehicleStateChangedEvent); ok && e.State != VehicleStateStandby {
+		if e, ok := event.(VehicleStateChangedEvent); ok && shouldDisarmForVehicleState(e.State) {
 			sm.vehicleStandby = false
 			return StateDisarmed
 		}
@@ -132,7 +158,7 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(BMXInterruptEvent); ok {
 			return StateTriggerLevel2
 		}
-		if e, ok := event.(VehicleStateChangedEvent); ok && e.State != VehicleStateStandby {
+		if e, ok := event.(VehicleStateChangedEvent); ok && shouldDisarmForVehicleState(e.State) {
 			sm.vehicleStandby = false
 			return StateDisarmed
 		}
@@ -151,7 +177,7 @@ func (sm *StateMachine) getTransition(event Event) State {
 			}
 			return StateWaitingMovement
 		}
-		if e, ok := event.(VehicleStateChangedEvent); ok && e.State != VehicleStateStandby {
+		if e, ok := event.(VehicleStateChangedEvent); ok && shouldDisarmForVehicleState(e.State) {
 			sm.vehicleStandby = false
 			return StateDisarmed
 		}
@@ -174,7 +200,7 @@ func (sm *StateMachine) getTransition(event Event) State {
 			}
 			return StateWaitingMovement
 		}
-		if e, ok := event.(VehicleStateChangedEvent); ok && e.State != VehicleStateStandby {
+		if e, ok := event.(VehicleStateChangedEvent); ok && shouldDisarmForVehicleState(e.State) {
 			sm.vehicleStandby = false
 			return StateDisarmed
 		}
@@ -191,7 +217,7 @@ func (sm *StateMachine) getTransition(event Event) State {
 			sm.seatboxLockClosed = true
 			return StateDelayArmed
 		}
-		if e, ok := event.(VehicleStateChangedEvent); ok && e.State != VehicleStateStandby {
+		if e, ok := event.(VehicleStateChangedEvent); ok && shouldDisarmForVehicleState(e.State) {
 			sm.vehicleStandby = false
 			return StateDisarmed
 		}
