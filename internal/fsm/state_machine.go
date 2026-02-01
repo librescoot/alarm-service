@@ -161,7 +161,7 @@ func New(
 		alarmDuration:       alarmDuration,
 		hairTriggerEnabled:  false,
 		hairTriggerDuration: 3,
-		l1CooldownDuration:  15,
+		l1CooldownDuration:  5,
 		preSeatboxState:     StateInit,
 		seatboxLockClosed:   true,
 	}

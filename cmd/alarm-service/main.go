@@ -24,7 +24,7 @@ func main() {
 	seatboxTrigger := flag.Bool("seatbox-trigger", true, "Trigger alarm on unauthorized seatbox opening")
 	hairTrigger := flag.Bool("hair-trigger", false, "Enable hair trigger mode (immediate short alarm on first motion)")
 	hairTriggerDuration := flag.Int("hair-trigger-duration", 3, "Hair trigger alarm duration in seconds")
-	l1Cooldown := flag.Int("l1-cooldown", 15, "Level 1 cooldown duration in seconds")
+	l1Cooldown := flag.Int("l1-cooldown", 5, "Level 1 cooldown duration in seconds")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 

@@ -97,6 +97,7 @@ const (
 // I2C/SMBus constants
 const (
 	I2C_SLAVE            = 0x0703
+	I2C_TIMEOUT          = 0x0702
 	I2C_SMBUS            = 0x0720
 	I2C_SMBUS_READ       = 1
 	I2C_SMBUS_WRITE      = 0
@@ -139,6 +140,18 @@ func openI2C(bus string, addr byte) (*i2cDevice, error) {
 		return nil, fmt.Errorf("failed to set I2C slave address 0x%02X: %v", addr, errno)
 	}
 
+	// Set kernel-level I2C timeout (in units of 10ms)
+	_, _, errno = syscall.Syscall(
+		syscall.SYS_IOCTL,
+		uintptr(fd),
+		I2C_TIMEOUT,
+		uintptr(50), // 500ms
+	)
+	if errno != 0 {
+		unix.Close(fd)
+		return nil, fmt.Errorf("failed to set I2C timeout: %v", errno)
+	}
+
 	return &i2cDevice{
 		fd:   fd,
 		bus:  bus,
@@ -154,7 +167,8 @@ func (d *i2cDevice) Close() error {
 	return nil
 }
 
-// ReadByteData reads a byte from a register using SMBus protocol
+// ReadByteData reads a byte from a register using SMBus protocol.
+// Timeout is handled by the kernel via I2C_TIMEOUT set at open time.
 func (d *i2cDevice) ReadByteData(reg byte) (byte, error) {
 	var dataBlock [34]byte
 	data := &smbusIoctlData{
@@ -170,14 +184,14 @@ func (d *i2cDevice) ReadByteData(reg byte) (byte, error) {
 		I2C_SMBUS,
 		uintptr(unsafe.Pointer(data)),
 	)
-
 	if errno != 0 {
 		return 0, fmt.Errorf("I2C_SMBUS read failed: %v", errno)
 	}
 	return dataBlock[0], nil
 }
 
-// WriteByteData writes a byte to a register using SMBus protocol
+// WriteByteData writes a byte to a register using SMBus protocol.
+// Timeout is handled by the kernel via I2C_TIMEOUT set at open time.
 func (d *i2cDevice) WriteByteData(reg, value byte) error {
 	var dataBlock [34]byte
 	dataBlock[0] = value
@@ -195,7 +209,6 @@ func (d *i2cDevice) WriteByteData(reg, value byte) error {
 		I2C_SMBUS,
 		uintptr(unsafe.Pointer(data)),
 	)
-
 	if errno != 0 {
 		return fmt.Errorf("I2C_SMBUS write failed: %v", errno)
 	}

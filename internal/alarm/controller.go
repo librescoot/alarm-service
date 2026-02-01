@@ -172,9 +172,8 @@ func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration)
 	}
 }
 
-// BlinkHazards briefly flashes the hazard lights once.
-// The blink fade animation completes at 504ms, so we send "off" at 600ms
-// to avoid cutting off the fade while the LED is still visible.
+// BlinkHazards flashes the hazard lights 3 times as an L1 warning.
+// Each cycle: 600ms on (fade completes at 504ms) + 400ms off.
 // This function is non-blocking to avoid stalling the FSM event loop.
 func (c *Controller) BlinkHazards() error {
 	c.log.Info("blinking hazards")
@@ -185,6 +184,16 @@ func (c *Controller) BlinkHazards() error {
 	}
 
 	go func() {
+		for i := 0; i < 2; i++ {
+			time.Sleep(600 * time.Millisecond)
+			if _, err := c.ipc.LPush("scooter:blinker", "off"); err != nil {
+				c.log.Error("failed to deactivate hazard lights", "error", err)
+			}
+			time.Sleep(400 * time.Millisecond)
+			if _, err := c.ipc.LPush("scooter:blinker", "both"); err != nil {
+				c.log.Error("failed to activate hazard lights", "error", err)
+			}
+		}
 		time.Sleep(600 * time.Millisecond)
 		if _, err := c.ipc.LPush("scooter:blinker", "off"); err != nil {
 			c.log.Error("failed to deactivate hazard lights", "error", err)
