@@ -154,8 +154,8 @@ func TestStateMachine_InitToDisarmed(t *testing.T) {
 	}
 }
 
-func TestStateMachine_InitToDelayArmed(t *testing.T) {
-	sm, _, pub, inh, _ := createTestStateMachine()
+func TestStateMachine_InitToArmedWhenStandby(t *testing.T) {
+	sm, bmx, pub, _, _ := createTestStateMachine()
 	ctx := context.Background()
 
 	sm.alarmEnabled = true
@@ -163,16 +163,16 @@ func TestStateMachine_InitToDelayArmed(t *testing.T) {
 	sm.SendEvent(InitCompleteEvent{})
 	sm.handleEvent(ctx, <-sm.events)
 
-	if sm.State() != StateDelayArmed {
-		t.Errorf("expected StateDelayArmed, got %s", sm.State())
+	if sm.State() != StateArmed {
+		t.Errorf("expected StateArmed (skip delay on startup), got %s", sm.State())
 	}
 
-	if pub.lastStatus != "delay-armed" {
-		t.Errorf("expected status 'delay-armed', got %s", pub.lastStatus)
+	if pub.lastStatus != "armed" {
+		t.Errorf("expected status 'armed', got %s", pub.lastStatus)
 	}
 
-	if !inh.acquired {
-		t.Error("expected suspend inhibitor to be acquired in delay_armed state")
+	if !bmx.interruptEnabled {
+		t.Error("expected interrupt to be enabled in armed state")
 	}
 }
 
@@ -903,69 +903,24 @@ func TestStateMachine_ShuttingDownDoesNotDisarm(t *testing.T) {
 	}
 }
 
-func TestStateMachine_HibernationWakeFromInit(t *testing.T) {
-	sm, _, _, inh, alarm := createTestStateMachine()
+func TestStateMachine_InitToArmedSkipsDelay(t *testing.T) {
+	sm, bmx, pub, _, _ := createTestStateMachine()
 	ctx := context.Background()
 
-	sm.alarmEnabled = true
-
-	sm.SendEvent(HibernationWakeEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateTriggerLevel1Wait {
-		t.Errorf("expected StateTriggerLevel1Wait on hibernation wake, got %s", sm.State())
-	}
-
-	if !inh.acquired {
-		t.Error("expected suspend inhibitor to be acquired")
-	}
-
-	if alarm.blinkCalled != 1 {
-		t.Errorf("expected hazards to blink once, got %d", alarm.blinkCalled)
-	}
-}
-
-func TestStateMachine_HibernationWakeIgnoredWhenAlarmDisabled(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.alarmEnabled = false
-
-	sm.SendEvent(HibernationWakeEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateInit {
-		t.Errorf("expected to stay in StateInit when alarm disabled, got %s", sm.State())
-	}
-}
-
-func TestStateMachine_HibernationWakeFromDisarmed(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateDisarmed
-	sm.alarmEnabled = true
-
-	sm.SendEvent(HibernationWakeEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateTriggerLevel1Wait {
-		t.Errorf("expected StateTriggerLevel1Wait on hibernation wake from disarmed, got %s", sm.State())
-	}
-}
-
-func TestStateMachine_HibernationWakeFromArmed(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateArmed
 	sm.alarmEnabled = true
 	sm.vehicleStandby = true
-
-	sm.SendEvent(HibernationWakeEvent{})
+	sm.SendEvent(InitCompleteEvent{})
 	sm.handleEvent(ctx, <-sm.events)
 
-	if sm.State() != StateTriggerLevel1Wait {
-		t.Errorf("expected StateTriggerLevel1Wait on hibernation wake from armed, got %s", sm.State())
+	if sm.State() != StateArmed {
+		t.Errorf("expected StateArmed on startup with alarm+standby, got %s", sm.State())
+	}
+
+	if pub.lastStatus != "armed" {
+		t.Errorf("expected status 'armed', got %s", pub.lastStatus)
+	}
+
+	if !bmx.interruptEnabled {
+		t.Error("expected interrupt to be enabled in armed state")
 	}
 }

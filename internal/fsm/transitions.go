@@ -23,16 +23,11 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if e, ok := event.(AlarmModeChangedEvent); ok {
 			sm.alarmEnabled = e.Enabled
 		}
-		if _, ok := event.(HibernationWakeEvent); ok {
-			if sm.alarmEnabled {
-				sm.log.Info("hibernation wake in init, fast-tracking to L1")
-				return StateTriggerLevel1Wait
-			}
-		}
 		if _, ok := event.(InitCompleteEvent); ok {
 			if sm.alarmEnabled {
 				if sm.vehicleStandby {
-					return StateDelayArmed
+					// Skip arming delay on startup — user already locked and walked away
+					return StateArmed
 				}
 				return StateDisarmed
 			}
@@ -53,12 +48,6 @@ func (sm *StateMachine) getTransition(event Event) State {
 			sm.vehicleStandby = true
 			return StateDelayArmed
 		}
-		if _, ok := event.(HibernationWakeEvent); ok {
-			if sm.alarmEnabled {
-				sm.log.Info("hibernation wake in disarmed, fast-tracking to L1")
-				return StateTriggerLevel1Wait
-			}
-		}
 		if e, ok := event.(AlarmModeChangedEvent); ok && !e.Enabled {
 			sm.alarmEnabled = false
 			return StateWaitingEnabled
@@ -70,10 +59,6 @@ func (sm *StateMachine) getTransition(event Event) State {
 	case StateDelayArmed:
 		if _, ok := event.(DelayArmedTimerEvent); ok {
 			return StateArmed
-		}
-		if _, ok := event.(HibernationWakeEvent); ok {
-			sm.log.Info("hibernation wake during arming delay, fast-tracking to L1")
-			return StateTriggerLevel1Wait
 		}
 		if _, ok := event.(UnauthorizedSeatboxEvent); ok {
 			return StateTriggerLevel2
@@ -102,9 +87,6 @@ func (sm *StateMachine) getTransition(event Event) State {
 			return StateTriggerLevel1Wait
 		}
 		if _, ok := event.(BMXInterruptEvent); ok {
-			return StateTriggerLevel1Wait
-		}
-		if _, ok := event.(HibernationWakeEvent); ok {
 			return StateTriggerLevel1Wait
 		}
 		if e, ok := event.(VehicleStateChangedEvent); ok && shouldDisarmForVehicleState(e.State) {
