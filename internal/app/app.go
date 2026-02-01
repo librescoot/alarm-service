@@ -110,7 +110,6 @@ func (a *App) Run(ctx context.Context) error {
 		a.publisher,
 		a.inhibitor,
 		a.alarmController,
-		fsm.NewFilePersistence(),
 		a.cfg.AlarmDuration,
 		a.log,
 	)
