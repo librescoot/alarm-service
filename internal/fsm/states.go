@@ -88,7 +88,7 @@ func (sm *StateMachine) onEnterArmed(ctx context.Context) {
 
 	sm.inhibitor.Release()
 
-	sm.configureBMX(ctx, InterruptPinNone, SensitivityMedium)
+	sm.configureBMX(ctx, InterruptPinBoth, SensitivityMedium)
 
 	if err := sm.bmxClient.EnableInterrupt(ctx); err != nil {
 		sm.log.Error("failed to enable interrupt", "error", err)
@@ -136,7 +136,7 @@ func (sm *StateMachine) onExitTriggerLevel1Wait(ctx context.Context) {
 func (sm *StateMachine) onEnterTriggerLevel1(ctx context.Context) {
 	sm.log.Info("entering trigger_level_1 state", "check_duration", "5s")
 
-	sm.configureBMX(ctx, InterruptPinNone, SensitivityMedium)
+	sm.configureBMX(ctx, InterruptPinBoth, SensitivityMedium)
 
 	if err := sm.bmxClient.EnableInterrupt(ctx); err != nil {
 		sm.log.Error("failed to enable interrupt", "error", err)

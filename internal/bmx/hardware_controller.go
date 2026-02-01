@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"alarm-service/internal/fsm"
-	"alarm-service/internal/hardware/bmx"
+	hwbmx "alarm-service/internal/hardware/bmx"
 )
 
 // Accelerometer interface for testing
@@ -15,7 +15,9 @@ type Accelerometer interface {
 	ConfigureSlowNoMotion(threshold, duration byte) error
 	DisableInterruptMapping() error
 	ConfigureInterruptPin(useInt2, latched bool) error
+	ConfigureInterruptPins(pin hwbmx.InterruptPin, latched bool) error
 	MapInterruptToPin(useInt2 bool) error
+	MapInterruptToPins(pin hwbmx.InterruptPin) error
 	SoftReset() error
 	EnableSlowNoMotionInterrupt(latched bool) error
 	DisableSlowNoMotionInterrupt() error
@@ -52,7 +54,7 @@ func NewHardwareController(accel Accelerometer, gyro Gyroscope, poller Interrupt
 
 // SetSensitivity sets the BMX sensitivity
 func (c *HardwareController) SetSensitivity(ctx context.Context, sens fsm.Sensitivity) error {
-	hwSens := bmx.ParseSensitivity(sens.String())
+	hwSens := hwbmx.ParseSensitivity(sens.String())
 	threshold := hwSens.GetThreshold()
 	duration := hwSens.GetDuration()
 
@@ -67,15 +69,22 @@ func (c *HardwareController) SetSensitivity(ctx context.Context, sens fsm.Sensit
 
 // SetInterruptPin sets the BMX interrupt pin
 func (c *HardwareController) SetInterruptPin(ctx context.Context, pin fsm.InterruptPin) error {
-	hwPin := bmx.ParseInterruptPin(pin.String())
+	hwPin := hwbmx.ParseInterruptPin(pin.String())
 	c.log.Info("setting interrupt pin", "pin", pin.String())
 
-	if hwPin == bmx.InterruptPinNone {
+	if hwPin == hwbmx.InterruptPinNone {
 		if err := c.accel.DisableInterruptMapping(); err != nil {
 			return fmt.Errorf("failed to disable interrupt mapping: %w", err)
 		}
+	} else if hwPin == hwbmx.InterruptPinBoth {
+		if err := c.accel.ConfigureInterruptPins(hwbmx.InterruptPinBoth, true); err != nil {
+			return fmt.Errorf("failed to configure interrupt pins: %w", err)
+		}
+		if err := c.accel.MapInterruptToPins(hwbmx.InterruptPinBoth); err != nil {
+			return fmt.Errorf("failed to map interrupt to pins: %w", err)
+		}
 	} else {
-		useInt2 := hwPin == bmx.InterruptPinINT2
+		useInt2 := hwPin == hwbmx.InterruptPinINT2
 		if err := c.accel.ConfigureInterruptPin(useInt2, true); err != nil {
 			return fmt.Errorf("failed to configure interrupt pin: %w", err)
 		}

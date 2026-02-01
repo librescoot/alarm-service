@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+
+	hwbmx "alarm-service/internal/hardware/bmx"
 )
 
 // mockAccelerometer for testing
@@ -17,6 +19,8 @@ type mockAccelerometer struct {
 	interruptPinInt2      bool
 	interruptPinLatched   bool
 	interruptMappedInt2   bool
+	interruptPinConfig    hwbmx.InterruptPin
+	interruptPinMapped    hwbmx.InterruptPin
 	resetCount            int
 	enableInterruptError  error
 	disableInterruptError error
@@ -39,8 +43,19 @@ func (m *mockAccelerometer) ConfigureInterruptPin(useInt2, latched bool) error {
 	return nil
 }
 
+func (m *mockAccelerometer) ConfigureInterruptPins(pin hwbmx.InterruptPin, latched bool) error {
+	m.interruptPinConfig = pin
+	m.interruptPinLatched = latched
+	return nil
+}
+
 func (m *mockAccelerometer) MapInterruptToPin(useInt2 bool) error {
 	m.interruptMappedInt2 = useInt2
+	return nil
+}
+
+func (m *mockAccelerometer) MapInterruptToPins(pin hwbmx.InterruptPin) error {
+	m.interruptPinMapped = pin
 	return nil
 }
 

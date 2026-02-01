@@ -108,19 +108,20 @@ func (a *Accelerometer) ConfigureSlowNoMotion(threshold, duration byte) error {
 	return nil
 }
 
-// ConfigureInterruptPin configures the interrupt pin behavior
-func (a *Accelerometer) ConfigureInterruptPin(useInt2 bool, latched bool) error {
+// ConfigureInterruptPins configures one or both interrupt pins
+func (a *Accelerometer) ConfigureInterruptPins(pin InterruptPin, latched bool) error {
 	outCtrl, err := a.ReadByteData(ACCEL_INT_OUT_CTRL)
 	if err != nil {
 		return fmt.Errorf("failed to read interrupt output control: %w", err)
 	}
 
-	if useInt2 {
-		outCtrl |= ACCEL_INT2_ACTIVE_HIGH
-		outCtrl &^= ACCEL_INT2_OPEN_DRAIN
-	} else {
+	if pin == InterruptPinINT1 || pin == InterruptPinBoth {
 		outCtrl |= ACCEL_INT1_ACTIVE_HIGH
 		outCtrl &^= ACCEL_INT1_OPEN_DRAIN
+	}
+	if pin == InterruptPinINT2 || pin == InterruptPinBoth {
+		outCtrl |= ACCEL_INT2_ACTIVE_HIGH
+		outCtrl &^= ACCEL_INT2_OPEN_DRAIN
 	}
 
 	if err := a.WriteByteData(ACCEL_INT_OUT_CTRL, outCtrl); err != nil {
@@ -139,18 +140,37 @@ func (a *Accelerometer) ConfigureInterruptPin(useInt2 bool, latched bool) error 
 	return nil
 }
 
-// MapInterruptToPin maps slow/no-motion interrupt to INT1 or INT2
-func (a *Accelerometer) MapInterruptToPin(useInt2 bool) error {
+// ConfigureInterruptPin configures a single interrupt pin (legacy wrapper)
+func (a *Accelerometer) ConfigureInterruptPin(useInt2 bool, latched bool) error {
+	pin := InterruptPinINT1
 	if useInt2 {
-		if err := a.WriteByteData(ACCEL_INT_MAP_2, ACCEL_INT2_MAP_SLOW_NO_MOTION); err != nil {
-			return fmt.Errorf("failed to map interrupt to INT2: %w", err)
-		}
-	} else {
+		pin = InterruptPinINT2
+	}
+	return a.ConfigureInterruptPins(pin, latched)
+}
+
+// MapInterruptToPins maps slow/no-motion interrupt to one or both pins
+func (a *Accelerometer) MapInterruptToPins(pin InterruptPin) error {
+	if pin == InterruptPinINT1 || pin == InterruptPinBoth {
 		if err := a.WriteByteData(ACCEL_INT_MAP_0, ACCEL_INT1_MAP_SLOW_NO_MOTION); err != nil {
 			return fmt.Errorf("failed to map interrupt to INT1: %w", err)
 		}
 	}
+	if pin == InterruptPinINT2 || pin == InterruptPinBoth {
+		if err := a.WriteByteData(ACCEL_INT_MAP_2, ACCEL_INT2_MAP_SLOW_NO_MOTION); err != nil {
+			return fmt.Errorf("failed to map interrupt to INT2: %w", err)
+		}
+	}
 	return nil
+}
+
+// MapInterruptToPin maps slow/no-motion interrupt to INT1 or INT2 (legacy wrapper)
+func (a *Accelerometer) MapInterruptToPin(useInt2 bool) error {
+	pin := InterruptPinINT1
+	if useInt2 {
+		pin = InterruptPinINT2
+	}
+	return a.MapInterruptToPins(pin)
 }
 
 // DisableInterruptMapping disables interrupt mapping to any pin

@@ -67,6 +67,7 @@ const (
 	InterruptPinNone InterruptPin = iota
 	InterruptPinINT1
 	InterruptPinINT2
+	InterruptPinBoth
 )
 
 func (p InterruptPin) String() string {
@@ -77,6 +78,8 @@ func (p InterruptPin) String() string {
 		return "int1"
 	case InterruptPinINT2:
 		return "int2"
+	case InterruptPinBoth:
+		return "both"
 	default:
 		return "unknown"
 	}

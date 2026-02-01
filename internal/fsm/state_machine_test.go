@@ -596,8 +596,8 @@ func TestStateMachine_BMXConfigurationInStates(t *testing.T) {
 		{StateWaitingEnabled, InterruptPinINT2, SensitivityLow},
 		{StateDisarmed, InterruptPinNone, SensitivityLow},
 		{StateDelayArmed, InterruptPinINT2, SensitivityLow},
-		{StateArmed, InterruptPinNone, SensitivityMedium},
-		{StateTriggerLevel1, InterruptPinNone, SensitivityMedium},
+		{StateArmed, InterruptPinBoth, SensitivityMedium},
+		{StateTriggerLevel1, InterruptPinBoth, SensitivityMedium},
 	}
 
 	for _, tt := range tests {
