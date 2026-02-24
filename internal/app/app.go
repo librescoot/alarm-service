@@ -114,6 +114,8 @@ func (a *App) Run(ctx context.Context) error {
 		a.log,
 	)
 
+	a.alarmController.SetCommander(a.stateMachine)
+
 	a.subscriber = redis.NewSubscriber(a.redis, a.stateMachine, a.log)
 
 	if err := a.publishInitialStatus(); err != nil {

@@ -40,6 +40,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 			sm.alarmEnabled = false
 			return StateWaitingEnabled
 		}
+		if _, ok := event.(RuntimeArmEvent); ok && sm.alarmEnabled {
+			return StateDelayArmed
+		}
 
 	case StateDelayArmed:
 		if _, ok := event.(DelayArmedTimerEvent); ok {
@@ -55,6 +58,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if e, ok := event.(AlarmModeChangedEvent); ok && !e.Enabled {
 			sm.alarmEnabled = false
 			return StateWaitingEnabled
+		}
+		if _, ok := event.(RuntimeDisarmEvent); ok {
+			return StateDisarmed
 		}
 
 	case StateArmed:
@@ -82,6 +88,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(ManualTriggerEvent); ok {
 			return StateTriggerLevel2
 		}
+		if _, ok := event.(RuntimeDisarmEvent); ok {
+			return StateDisarmed
+		}
 
 	case StateTriggerLevel1Wait:
 		if _, ok := event.(SeatboxOpenedEvent); ok {
@@ -101,6 +110,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if e, ok := event.(AlarmModeChangedEvent); ok && !e.Enabled {
 			sm.alarmEnabled = false
 			return StateWaitingEnabled
+		}
+		if _, ok := event.(RuntimeDisarmEvent); ok {
+			return StateDisarmed
 		}
 
 	case StateTriggerLevel1:
@@ -128,6 +140,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 			sm.alarmEnabled = false
 			return StateWaitingEnabled
 		}
+		if _, ok := event.(RuntimeDisarmEvent); ok {
+			return StateDisarmed
+		}
 
 	case StateTriggerLevel2:
 		if _, ok := event.(Level2CheckTimerEvent); ok {
@@ -143,6 +158,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if e, ok := event.(AlarmModeChangedEvent); ok && !e.Enabled {
 			sm.alarmEnabled = false
 			return StateWaitingEnabled
+		}
+		if _, ok := event.(RuntimeDisarmEvent); ok {
+			return StateDisarmed
 		}
 
 	case StateWaitingMovement:
@@ -163,6 +181,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if e, ok := event.(AlarmModeChangedEvent); ok && !e.Enabled {
 			sm.alarmEnabled = false
 			return StateWaitingEnabled
+		}
+		if _, ok := event.(RuntimeDisarmEvent); ok {
+			return StateDisarmed
 		}
 
 	case StateSeatboxAccess:

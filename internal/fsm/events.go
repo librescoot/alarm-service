@@ -72,6 +72,16 @@ type TemporarilyDisarmEvent struct{}
 
 func (e TemporarilyDisarmEvent) Type() string { return "temporarily_disarm" }
 
+// RuntimeArmEvent forces the FSM to arm without changing alarm.enabled
+type RuntimeArmEvent struct{}
+
+func (e RuntimeArmEvent) Type() string { return "runtime_arm" }
+
+// RuntimeDisarmEvent forces the FSM to disarm without changing alarm.enabled
+type RuntimeDisarmEvent struct{}
+
+func (e RuntimeDisarmEvent) Type() string { return "runtime_disarm" }
+
 // DelayArmedTimerEvent signals delay armed timer expired
 type DelayArmedTimerEvent struct{}
 

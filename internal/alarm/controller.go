@@ -11,12 +11,19 @@ import (
 	ipc "github.com/librescoot/redis-ipc"
 )
 
+// RuntimeCommander handles runtime arm/disarm commands that bypass the settings hash.
+type RuntimeCommander interface {
+	RuntimeArm()
+	RuntimeDisarm()
+}
+
 // Controller manages alarm activation (horn + hazard lights)
 type Controller struct {
 	ipc         *ipc.Client
 	alarmPub    *ipc.HashPublisher
 	settingsPub *ipc.HashPublisher
 	cmdHandler  *ipc.QueueHandler[string]
+	commander   RuntimeCommander
 	ctx         context.Context
 	cancel      context.CancelFunc
 	log         *slog.Logger
@@ -63,6 +70,11 @@ func (c *Controller) Close() error {
 		c.cmdHandler.Stop()
 	}
 	return c.ipc.Close()
+}
+
+// SetCommander sets the RuntimeCommander used to forward arm/disarm commands to the FSM.
+func (c *Controller) SetCommander(commander RuntimeCommander) {
+	c.commander = commander
 }
 
 // SetHornEnabled updates the horn enabled setting
@@ -216,6 +228,18 @@ func (c *Controller) handleCommand(cmd string) {
 	case "disable":
 		c.settingsPub.Set("alarm.enabled", "false")
 		c.log.Info("alarm disabled via command")
+		return
+	case "arm":
+		if c.commander != nil {
+			c.commander.RuntimeArm()
+			c.log.Info("runtime arm requested")
+		}
+		return
+	case "disarm":
+		if c.commander != nil {
+			c.commander.RuntimeDisarm()
+			c.log.Info("runtime disarm requested")
+		}
 		return
 	}
 

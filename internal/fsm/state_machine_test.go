@@ -733,3 +733,128 @@ func TestStateMachine_SeatboxAccessToDelayArmed(t *testing.T) {
 		t.Error("expected seatboxLockClosed to be true")
 	}
 }
+
+func TestStateMachine_RuntimeDisarmFromArmedStates(t *testing.T) {
+	// statesWithAlarm: alarm controller is running in these states (exit handler calls Stop)
+	statesWithAlarm := map[State]bool{
+		StateTriggerLevel1Wait: true,
+		StateTriggerLevel2:     true,
+		StateWaitingMovement:   true,
+	}
+
+	states := []State{
+		StateDelayArmed,
+		StateArmed,
+		StateTriggerLevel1Wait,
+		StateTriggerLevel1,
+		StateTriggerLevel2,
+		StateWaitingMovement,
+	}
+
+	for _, initialState := range states {
+		sm, _, _, _, alarm := createTestStateMachine()
+		ctx := context.Background()
+
+		sm.state = initialState
+		sm.alarmEnabled = true
+		sm.vehicleStandby = true
+		alarm.active = statesWithAlarm[initialState]
+
+		sm.SendEvent(RuntimeDisarmEvent{})
+		sm.handleEvent(ctx, <-sm.events)
+
+		if sm.State() != StateDisarmed {
+			t.Errorf("RuntimeDisarm from %s: expected StateDisarmed, got %s", initialState, sm.State())
+		}
+
+		if !sm.alarmEnabled {
+			t.Errorf("RuntimeDisarm from %s: alarmEnabled should remain true", initialState)
+		}
+
+		if statesWithAlarm[initialState] && alarm.active {
+			t.Errorf("RuntimeDisarm from %s: alarm should be stopped", initialState)
+		}
+	}
+}
+
+func TestStateMachine_RuntimeDisarmPreservesAlarmEnabled(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+
+	sm.SendEvent(RuntimeDisarmEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateDisarmed {
+		t.Errorf("expected StateDisarmed, got %s", sm.State())
+	}
+
+	// alarmEnabled must not be touched — re-arm on next standby should work
+	if !sm.alarmEnabled {
+		t.Error("alarmEnabled must remain true after runtime disarm")
+	}
+}
+
+func TestStateMachine_RuntimeDisarmThenRearmOnStandby(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+
+	sm.SendEvent(RuntimeDisarmEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateDisarmed {
+		t.Fatalf("expected StateDisarmed, got %s", sm.State())
+	}
+
+	// Simulate scooter going active then returning to standby
+	sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateReadyToDrive})
+	sm.handleEvent(ctx, <-sm.events)
+	sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateStandby})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateDelayArmed {
+		t.Errorf("expected StateDelayArmed after returning to standby, got %s", sm.State())
+	}
+}
+
+func TestStateMachine_RuntimeArmFromDisarmed(t *testing.T) {
+	sm, _, _, inh, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateDisarmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = false // not in standby — arm forced anyway
+
+	sm.SendEvent(RuntimeArmEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateDelayArmed {
+		t.Errorf("expected StateDelayArmed, got %s", sm.State())
+	}
+
+	if !inh.acquired {
+		t.Error("expected suspend inhibitor to be acquired")
+	}
+}
+
+func TestStateMachine_RuntimeArmIgnoredWhenDisabled(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateDisarmed
+	sm.alarmEnabled = false
+
+	sm.SendEvent(RuntimeArmEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateDisarmed {
+		t.Errorf("RuntimeArm with disabled alarm should be ignored, got %s", sm.State())
+	}
+}

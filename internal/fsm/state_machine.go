@@ -194,6 +194,12 @@ func (sm *StateMachine) SendEvent(event Event) {
 	}
 }
 
+// RuntimeArm implements alarm.RuntimeCommander — forces arming without changing alarm.enabled
+func (sm *StateMachine) RuntimeArm() { sm.SendEvent(RuntimeArmEvent{}) }
+
+// RuntimeDisarm implements alarm.RuntimeCommander — forces disarming without changing alarm.enabled
+func (sm *StateMachine) RuntimeDisarm() { sm.SendEvent(RuntimeDisarmEvent{}) }
+
 // State returns the current state
 func (sm *StateMachine) State() State {
 	sm.mu.RLock()
