@@ -14,6 +14,7 @@ type mockBMXClient struct {
 	interruptPin     InterruptPin
 	interruptEnabled bool
 	resetCalled      int
+	interruptStatus  bool
 }
 
 func (m *mockBMXClient) SetSensitivity(ctx context.Context, sens Sensitivity) error {
@@ -39,6 +40,10 @@ func (m *mockBMXClient) EnableInterrupt(ctx context.Context) error {
 func (m *mockBMXClient) DisableInterrupt(ctx context.Context) error {
 	m.interruptEnabled = false
 	return nil
+}
+
+func (m *mockBMXClient) CheckInterruptStatus(ctx context.Context) (bool, error) {
+	return m.interruptStatus, nil
 }
 
 type mockStatusPublisher struct {

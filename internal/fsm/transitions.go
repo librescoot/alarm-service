@@ -26,7 +26,12 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(InitCompleteEvent); ok {
 			if sm.alarmEnabled {
 				if sm.vehicleStandby {
-					// Skip arming delay on startup — user already locked and walked away
+					// Check if accelerometer has a latched interrupt from before boot
+					// (e.g. motion that woke the system from hibernation)
+					if motionDetected, err := sm.bmxClient.CheckInterruptStatus(sm.ctx); err == nil && motionDetected {
+						sm.log.Info("motion detected before startup, triggering L1")
+						return StateTriggerLevel1Wait
+					}
 					return StateArmed
 				}
 				return StateDisarmed

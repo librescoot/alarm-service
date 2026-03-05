@@ -118,6 +118,7 @@ type BMXClient interface {
 	SoftReset(ctx context.Context) error
 	EnableInterrupt(ctx context.Context) error
 	DisableInterrupt(ctx context.Context) error
+	CheckInterruptStatus(ctx context.Context) (bool, error)
 }
 
 // StatusPublisher interface for publishing alarm status

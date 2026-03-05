@@ -21,6 +21,8 @@ type Accelerometer interface {
 	SoftReset() error
 	EnableSlowNoMotionInterrupt(latched bool) error
 	DisableSlowNoMotionInterrupt() error
+	GetInterruptStatus() (bool, error)
+	ClearLatchedInterrupt() error
 }
 
 // Gyroscope interface for testing
@@ -145,6 +147,21 @@ func (c *HardwareController) DisableInterrupt(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// CheckInterruptStatus reads the accelerometer interrupt status register
+// and clears it if set. Returns true if motion was detected.
+func (c *HardwareController) CheckInterruptStatus(ctx context.Context) (bool, error) {
+	triggered, err := c.accel.GetInterruptStatus()
+	if err != nil {
+		return false, fmt.Errorf("failed to read interrupt status: %w", err)
+	}
+	if triggered {
+		if err := c.accel.ClearLatchedInterrupt(); err != nil {
+			c.log.Warn("failed to clear latched interrupt", "error", err)
+		}
+	}
+	return triggered, nil
 }
 
 // Close closes the hardware controller

@@ -176,13 +176,32 @@ func (s *Subscriber) Start() error {
 	return nil
 }
 
-// CheckBMXInitialized checks if BMX service is already initialized
+// CheckBMXInitialized checks if BMX service is already initialized.
+// It synchronously reads alarm.enabled and vehicle state to ensure
+// the FSM has correct state before processing InitCompleteEvent.
 func (s *Subscriber) CheckBMXInitialized() error {
 	bmxInitialized, err := s.ipc.HGet("bmx", "initialized")
-	if err == nil && bmxInitialized == "true" {
-		s.log.Info("BMX service already initialized")
-		s.sm.SendEvent(fsm.InitCompleteEvent{})
+	if err != nil || bmxInitialized != "true" {
+		return nil
 	}
+
+	s.log.Info("BMX service already initialized")
+
+	// Ensure alarm.enabled and vehicle state are sent before InitCompleteEvent,
+	// since StartWithSync callback ordering is not guaranteed
+	if alarmEnabled, err := s.ipc.HGet("settings", "alarm.enabled"); err == nil {
+		enabled := alarmEnabled == "true"
+		s.log.Info("init: alarm enabled", "enabled", enabled)
+		s.sm.SendEvent(fsm.AlarmModeChangedEvent{Enabled: enabled})
+	}
+
+	if vehicleState, err := s.ipc.HGet("vehicle", "state"); err == nil {
+		state := fsm.ParseVehicleState(vehicleState)
+		s.log.Info("init: vehicle state", "state", state.String())
+		s.sm.SendEvent(fsm.VehicleStateChangedEvent{State: state})
+	}
+
+	s.sm.SendEvent(fsm.InitCompleteEvent{})
 	return nil
 }
 

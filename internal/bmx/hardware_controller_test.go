@@ -72,6 +72,14 @@ func (m *mockAccelerometer) EnableSlowNoMotionInterrupt(latched bool) error {
 	return nil
 }
 
+func (m *mockAccelerometer) GetInterruptStatus() (bool, error) {
+	return false, nil
+}
+
+func (m *mockAccelerometer) ClearLatchedInterrupt() error {
+	return nil
+}
+
 func (m *mockAccelerometer) DisableSlowNoMotionInterrupt() error {
 	if m.disableInterruptError != nil {
 		return m.disableInterruptError
