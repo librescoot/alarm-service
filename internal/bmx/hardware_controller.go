@@ -12,6 +12,7 @@ import (
 
 // Accelerometer interface for testing
 type Accelerometer interface {
+	SetBandwidth(bw byte) error
 	ConfigureSlowNoMotion(threshold, duration byte) error
 	DisableInterruptMapping() error
 	ConfigureInterruptPin(useInt2, latched bool) error
@@ -54,13 +55,19 @@ func NewHardwareController(accel Accelerometer, gyro Gyroscope, poller Interrupt
 	}
 }
 
-// SetSensitivity sets the BMX sensitivity
+// SetSensitivity sets the BMX sensitivity: bandwidth, threshold, and duration.
+// Bandwidth must be set after every soft reset (POR default is 1000 Hz).
 func (c *HardwareController) SetSensitivity(ctx context.Context, sens fsm.Sensitivity) error {
 	hwSens := hwbmx.ParseSensitivity(sens.String())
+	bw := hwSens.GetBandwidth()
 	threshold := hwSens.GetThreshold()
 	duration := hwSens.GetDuration()
 
-	c.log.Info("setting sensitivity", "level", sens.String(), "threshold", threshold, "duration", duration)
+	c.log.Info("setting sensitivity", "level", sens.String(), "bw", bw, "threshold", threshold, "duration", duration)
+
+	if err := c.accel.SetBandwidth(bw); err != nil {
+		return fmt.Errorf("failed to set bandwidth: %w", err)
+	}
 
 	if err := c.accel.ConfigureSlowNoMotion(threshold, duration); err != nil {
 		return fmt.Errorf("failed to configure slow/no-motion: %w", err)
@@ -125,6 +132,12 @@ func (c *HardwareController) EnableInterrupt(ctx context.Context) error {
 
 	if err := c.accel.EnableSlowNoMotionInterrupt(true); err != nil {
 		return fmt.Errorf("failed to enable interrupt: %w", err)
+	}
+
+	// Clear any latched interrupt that may have accumulated during sensor
+	// configuration (e.g. filter settling transient after bandwidth change).
+	if err := c.accel.ClearLatchedInterrupt(); err != nil {
+		c.log.Warn("failed to clear latched interrupt before enabling poller", "error", err)
 	}
 
 	c.poller.Enable()

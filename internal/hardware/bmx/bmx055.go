@@ -28,6 +28,19 @@ const (
 	ACCEL_PMU_RANGE            = 0x0F
 	ACCEL_PMU_BW               = 0x10
 	ACCEL_PMU_LPW              = 0x11
+
+	// Bandwidth register values for PMU_BW (0x10).
+	// Sample rate = 2 × BW; slope detection compares samples 1/sample_rate apart.
+	// Per datasheet: "It is recommended to actively set an application specific bandwidth."
+	// Power-on default is 1000 Hz — must be explicitly set after every soft reset.
+	ACCEL_BW_7_81HZ  = 0x08 // 7.81 Hz, sample period 64 ms — best vibration rejection
+	ACCEL_BW_15_63HZ = 0x09 // 15.63 Hz, sample period 32 ms
+	ACCEL_BW_31_25HZ = 0x0A // 31.25 Hz, sample period 16 ms
+	ACCEL_BW_62_5HZ  = 0x0B // 62.5 Hz, sample period 8 ms
+	ACCEL_BW_125HZ   = 0x0C // 125 Hz, sample period 4 ms
+	ACCEL_BW_250HZ   = 0x0D // 250 Hz, sample period 2 ms
+	ACCEL_BW_500HZ   = 0x0E // 500 Hz, sample period 1 ms
+	ACCEL_BW_1000HZ  = 0x0F // 1000 Hz, sample period 0.5 ms — power-on default
 	ACCEL_BGW_SOFTRESET        = 0x14
 	ACCEL_INT_EN_0             = 0x16
 	ACCEL_INT_EN_1             = 0x17

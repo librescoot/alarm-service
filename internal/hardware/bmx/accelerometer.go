@@ -225,6 +225,17 @@ func (a *Accelerometer) ClearLatchedInterrupt() error {
 	return nil
 }
 
+// SetBandwidth sets the accelerometer low-pass filter bandwidth (register PMU_BW 0x10).
+// This controls the sample rate (ODR = 2 × BW) and therefore the time window over which
+// the slow/no-motion slope is computed. Must be called after every soft reset since the
+// power-on default is 1000 Hz.
+func (a *Accelerometer) SetBandwidth(bw byte) error {
+	if err := a.WriteByteData(ACCEL_PMU_BW, bw); err != nil {
+		return fmt.Errorf("failed to set bandwidth: %w", err)
+	}
+	return nil
+}
+
 // SoftReset performs a soft reset of the accelerometer
 func (a *Accelerometer) SoftReset() error {
 	if err := a.WriteByteData(ACCEL_BGW_SOFTRESET, 0xB6); err != nil {

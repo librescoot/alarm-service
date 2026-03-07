@@ -79,28 +79,38 @@ func ParseSensitivity(s string) Sensitivity {
 
 // GetThreshold returns the slow/no-motion threshold for register 0x29.
 // Per BMX055 datasheet (BST-BMX055-DS000), 1 LSB = 3.91 mg in 2g range.
-// Values were empirically tuned for vehicle motion detection:
-//   - Low (0x10=16):  16 × 3.91 mg = ~63 mg - minimal sensitivity, ignores small bumps
-//   - Medium (0x09=9): 9 × 3.91 mg = ~35 mg - balanced for typical use
-//   - High (0x08=8):   8 × 3.91 mg = ~31 mg - detects subtle movement
+// These values are tuned for use with BW=7.81 Hz (sample period 64 ms).
+// At low bandwidth, high-frequency vibrations are filtered out, so the
+// thresholds can be lower than they'd need to be at 1 kHz.
+//
+//   - Low (0x14=20):    20 × 3.91 mg = ~78 mg  — ignores minor bumps/wind
+//   - Medium (0x09=9):   9 × 3.91 mg = ~35 mg  — detects deliberate movement
+//   - High (0x06=6):     6 × 3.91 mg = ~23 mg  — detects subtle tilting
 func (s Sensitivity) GetThreshold() byte {
 	switch s {
 	case SensitivityLow:
-		return 0x10 // ~63 mg
+		return 0x14 // ~78 mg
 	case SensitivityMedium:
 		return 0x09 // ~35 mg
 	case SensitivityHigh:
-		return 0x08 // ~31 mg
+		return 0x06 // ~23 mg
 	default:
 		return 0x09
 	}
 }
 
 // GetDuration returns the slow/no-motion duration for register 0x27.
-// Per BMX055 datasheet, in slow-motion mode this sets the number of
-// consecutive samples (N = dur + 1) that must exceed threshold.
-// Duration 0x01 means 2 consecutive samples required, providing
-// basic debouncing while maintaining quick response.
+// In slow-motion mode N = dur + 1 consecutive samples must exceed the threshold.
+// With BW=7.81 Hz (64 ms/sample), duration 0x02 → 3 samples = ~192 ms debounce.
 func (s Sensitivity) GetDuration() byte {
-	return 0x01 // 2 consecutive samples
+	return 0x02 // 3 consecutive samples (~192 ms at 7.81 Hz)
+}
+
+// GetBandwidth returns the PMU_BW register value for this sensitivity level.
+// All levels use 7.81 Hz — the lowest available bandwidth — to maximise rejection
+// of high-frequency vibration (wind, traffic, engine noise) that would otherwise
+// cause false L1 triggers. The power-on default is 1000 Hz so this must be set
+// explicitly after every soft reset.
+func (s Sensitivity) GetBandwidth() byte {
+	return ACCEL_BW_7_81HZ
 }

@@ -13,6 +13,7 @@ import (
 // mockAccelerometer for testing
 type mockAccelerometer struct {
 	interruptEnabled      bool
+	bandwidth             byte
 	slowNoMotionThreshold byte
 	slowNoMotionDuration  byte
 	interruptMappingOff   bool
@@ -24,6 +25,11 @@ type mockAccelerometer struct {
 	resetCount            int
 	enableInterruptError  error
 	disableInterruptError error
+}
+
+func (m *mockAccelerometer) SetBandwidth(bw byte) error {
+	m.bandwidth = bw
+	return nil
 }
 
 func (m *mockAccelerometer) ConfigureSlowNoMotion(threshold, duration byte) error {
