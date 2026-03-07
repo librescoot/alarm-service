@@ -13,6 +13,7 @@ import (
 // mockAccelerometer for testing
 type mockAccelerometer struct {
 	interruptEnabled      bool
+	anyMotionEnabled      bool
 	bandwidth             byte
 	slowNoMotionThreshold byte
 	slowNoMotionDuration  byte
@@ -94,6 +95,24 @@ func (m *mockAccelerometer) DisableSlowNoMotionInterrupt() error {
 	return nil
 }
 
+func (m *mockAccelerometer) EnableAnyMotionInterrupt(threshold, duration byte) error {
+	m.anyMotionEnabled = true
+	return nil
+}
+
+func (m *mockAccelerometer) DisableAnyMotionInterrupt() error {
+	m.anyMotionEnabled = false
+	return nil
+}
+
+func (m *mockAccelerometer) MapAnyMotionToPins(pin hwbmx.InterruptPin) error {
+	return nil
+}
+
+func (m *mockAccelerometer) GetAnyMotionInterruptStatus() (bool, error) {
+	return false, nil
+}
+
 // mockGyroscope for testing
 type mockGyroscope struct {
 	resetCount int
@@ -128,8 +147,11 @@ func TestHardwareController_EnableInterrupt(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	controller := NewHardwareController(accel, gyro, poller, log)
-
 	ctx := context.Background()
+
+	// Use slow-motion mode so EnableSlowNoMotionInterrupt is called.
+	_ = controller.configureSensorHW(ctx, hwbmx.SensorConfig{Mode: hwbmx.InterruptModeSlowMotion, Bandwidth: 0x08, Threshold: 0x08, Duration: 0x03})
+
 	if err := controller.EnableInterrupt(ctx); err != nil {
 		t.Fatalf("EnableInterrupt failed: %v", err)
 	}
@@ -181,6 +203,9 @@ func TestHardwareController_EnableDisableCycle(t *testing.T) {
 
 	controller := NewHardwareController(accel, gyro, poller, log)
 	ctx := context.Background()
+
+	// Use slow-motion mode so EnableSlowNoMotionInterrupt is called.
+	_ = controller.configureSensorHW(ctx, hwbmx.SensorConfig{Mode: hwbmx.InterruptModeSlowMotion, Bandwidth: 0x08, Threshold: 0x08, Duration: 0x03})
 
 	// Enable
 	if err := controller.EnableInterrupt(ctx); err != nil {
@@ -262,8 +287,11 @@ func TestHardwareController_EnableInterruptError(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	controller := NewHardwareController(accel, gyro, poller, log)
-
 	ctx := context.Background()
+
+	// Use slow-motion mode so EnableSlowNoMotionInterrupt is called (and returns the error).
+	_ = controller.configureSensorHW(ctx, hwbmx.SensorConfig{Mode: hwbmx.InterruptModeSlowMotion, Bandwidth: 0x08, Threshold: 0x08, Duration: 0x03})
+
 	err := controller.EnableInterrupt(ctx)
 
 	if err == nil {

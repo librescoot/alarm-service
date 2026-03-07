@@ -13,16 +13,23 @@ import (
 // Accelerometer interface for testing
 type Accelerometer interface {
 	SetBandwidth(bw byte) error
+	// Slow/no-motion engine
 	ConfigureSlowNoMotion(threshold, duration byte) error
+	EnableSlowNoMotionInterrupt(latched bool) error
+	DisableSlowNoMotionInterrupt() error
+	GetInterruptStatus() (bool, error)
+	// Any-motion (slope) engine
+	EnableAnyMotionInterrupt(threshold, duration byte) error
+	DisableAnyMotionInterrupt() error
+	MapAnyMotionToPins(pin hwbmx.InterruptPin) error
+	GetAnyMotionInterruptStatus() (bool, error)
+	// Shared
 	DisableInterruptMapping() error
 	ConfigureInterruptPin(useInt2, latched bool) error
 	ConfigureInterruptPins(pin hwbmx.InterruptPin, latched bool) error
 	MapInterruptToPin(useInt2 bool) error
 	MapInterruptToPins(pin hwbmx.InterruptPin) error
 	SoftReset() error
-	EnableSlowNoMotionInterrupt(latched bool) error
-	DisableSlowNoMotionInterrupt() error
-	GetInterruptStatus() (bool, error)
 	ClearLatchedInterrupt() error
 }
 
@@ -39,10 +46,11 @@ type InterruptPoller interface {
 
 // HardwareController controls the BMX055 hardware directly
 type HardwareController struct {
-	accel  Accelerometer
-	gyro   Gyroscope
-	poller InterruptPoller
-	log    *slog.Logger
+	accel       Accelerometer
+	gyro        Gyroscope
+	poller      InterruptPoller
+	log         *slog.Logger
+	currentMode hwbmx.InterruptMode
 }
 
 // NewHardwareController creates a new hardware controller
@@ -55,24 +63,48 @@ func NewHardwareController(accel Accelerometer, gyro Gyroscope, poller Interrupt
 	}
 }
 
-// SetSensitivity sets the BMX sensitivity: bandwidth, threshold, and duration.
-// Bandwidth must be set after every soft reset (POR default is 1000 Hz).
-func (c *HardwareController) SetSensitivity(ctx context.Context, sens fsm.Sensitivity) error {
-	hwSens := hwbmx.ParseSensitivity(sens.String())
-	bw := hwSens.GetBandwidth()
-	threshold := hwSens.GetThreshold()
-	duration := hwSens.GetDuration()
+// ConfigureSensor satisfies the fsm.BMXClient interface. Translates fsm.SensorConfig
+// (AnyMotion bool) to the hardware-layer hwbmx.SensorConfig and applies it.
+func (c *HardwareController) ConfigureSensor(ctx context.Context, cfg fsm.SensorConfig) error {
+	mode := hwbmx.InterruptModeSlowMotion
+	if cfg.AnyMotion {
+		mode = hwbmx.InterruptModeAnyMotion
+	}
+	return c.configureSensorHW(ctx, hwbmx.SensorConfig{
+		Mode:      mode,
+		Bandwidth: cfg.Bandwidth,
+		Threshold: cfg.Threshold,
+		Duration:  cfg.Duration,
+	})
+}
 
-	c.log.Info("setting sensitivity", "level", sens.String(), "bw", bw, "threshold", threshold, "duration", duration)
+// configureSensorHW applies a full hardware SensorConfig: bandwidth, interrupt mode, threshold, duration.
+// Disables whichever interrupt engine is not in use to avoid crosstalk.
+func (c *HardwareController) configureSensorHW(ctx context.Context, cfg hwbmx.SensorConfig) error {
+	c.log.Info("configuring sensor", "mode", cfg.Mode.String(), "bw", cfg.Bandwidth, "threshold", cfg.Threshold, "duration", cfg.Duration)
 
-	if err := c.accel.SetBandwidth(bw); err != nil {
+	if err := c.accel.SetBandwidth(cfg.Bandwidth); err != nil {
 		return fmt.Errorf("failed to set bandwidth: %w", err)
 	}
 
-	if err := c.accel.ConfigureSlowNoMotion(threshold, duration); err != nil {
-		return fmt.Errorf("failed to configure slow/no-motion: %w", err)
+	switch cfg.Mode {
+	case hwbmx.InterruptModeAnyMotion:
+		if err := c.accel.DisableSlowNoMotionInterrupt(); err != nil {
+			return fmt.Errorf("failed to disable slow-motion: %w", err)
+		}
+		if err := c.accel.EnableAnyMotionInterrupt(cfg.Threshold, cfg.Duration); err != nil {
+			return fmt.Errorf("failed to enable any-motion: %w", err)
+		}
+	case hwbmx.InterruptModeSlowMotion:
+		if err := c.accel.DisableAnyMotionInterrupt(); err != nil {
+			return fmt.Errorf("failed to disable any-motion: %w", err)
+		}
+		if err := c.accel.ConfigureSlowNoMotion(cfg.Threshold, cfg.Duration); err != nil {
+			return fmt.Errorf("failed to configure slow-motion: %w", err)
+		}
 	}
 
+	c.currentMode = cfg.Mode
 	return nil
 }
 
@@ -126,46 +158,62 @@ func (c *HardwareController) SoftReset(ctx context.Context) error {
 	return nil
 }
 
-// EnableInterrupt enables BMX interrupt
+// EnableInterrupt maps interrupt pins and enables the poller for the current mode.
+// Must be called after ConfigureSensor. Clears any stale latched interrupt first
+// to avoid false triggers from filter-settling transients during configuration.
 func (c *HardwareController) EnableInterrupt(ctx context.Context) error {
-	c.log.Info("enabling interrupt")
+	c.log.Info("enabling interrupt", "mode", c.currentMode.String())
 
-	if err := c.accel.EnableSlowNoMotionInterrupt(true); err != nil {
-		return fmt.Errorf("failed to enable interrupt: %w", err)
+	if c.currentMode == hwbmx.InterruptModeAnyMotion {
+		if err := c.accel.MapAnyMotionToPins(hwbmx.InterruptPinBoth); err != nil {
+			return fmt.Errorf("failed to map any-motion interrupt: %w", err)
+		}
+	} else {
+		if err := c.accel.EnableSlowNoMotionInterrupt(true); err != nil {
+			return fmt.Errorf("failed to enable slow-motion interrupt: %w", err)
+		}
 	}
 
-	// Clear any latched interrupt that may have accumulated during sensor
-	// configuration (e.g. filter settling transient after bandwidth change).
 	if err := c.accel.ClearLatchedInterrupt(); err != nil {
 		c.log.Warn("failed to clear latched interrupt before enabling poller", "error", err)
 	}
 
 	c.poller.Enable()
-
 	return nil
 }
 
-// DisableInterrupt disables BMX interrupt
+// DisableInterrupt disables both interrupt engines and the poller.
 func (c *HardwareController) DisableInterrupt(ctx context.Context) error {
 	c.log.Info("disabling interrupt")
 
-	err := c.accel.DisableSlowNoMotionInterrupt()
-
-	// Always disable the poller, even if hardware disable fails
-	// to prevent polling potentially broken hardware
-	c.poller.Disable()
-
-	if err != nil {
-		return fmt.Errorf("failed to disable interrupt: %w", err)
+	var errs []error
+	if err := c.accel.DisableSlowNoMotionInterrupt(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := c.accel.DisableAnyMotionInterrupt(); err != nil {
+		errs = append(errs, err)
 	}
 
+	// Always disable the poller even if hardware disable fails.
+	c.poller.Disable()
+
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to disable interrupt: %v", errs)
+	}
 	return nil
 }
 
-// CheckInterruptStatus reads the accelerometer interrupt status register
-// and clears it if set. Returns true if motion was detected.
+// CheckInterruptStatus reads the appropriate interrupt status register for the
+// current mode, clears the latch if triggered, and returns whether motion was detected.
 func (c *HardwareController) CheckInterruptStatus(ctx context.Context) (bool, error) {
-	triggered, err := c.accel.GetInterruptStatus()
+	var triggered bool
+	var err error
+
+	if c.currentMode == hwbmx.InterruptModeAnyMotion {
+		triggered, err = c.accel.GetAnyMotionInterruptStatus()
+	} else {
+		triggered, err = c.accel.GetInterruptStatus()
+	}
 	if err != nil {
 		return false, fmt.Errorf("failed to read interrupt status: %w", err)
 	}

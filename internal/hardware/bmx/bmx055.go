@@ -56,19 +56,39 @@ const (
 	ACCEL_SLO_NO_MOT_THRESHOLD = 0x29
 )
 
-// Accelerometer interrupt bits
+// Accelerometer interrupt enable bits (register 0x16 INT_EN_0)
+const (
+	ACCEL_INT_EN_SLOPE_X = 0x01
+	ACCEL_INT_EN_SLOPE_Y = 0x02
+	ACCEL_INT_EN_SLOPE_Z = 0x04
+)
+
+// Accelerometer interrupt enable bits (register 0x18 INT_EN_2)
 const (
 	ACCEL_INT_EN_SLOW_NO_MOTION_X   = 0x01
 	ACCEL_INT_EN_SLOW_NO_MOTION_Y   = 0x02
 	ACCEL_INT_EN_SLOW_NO_MOTION_Z   = 0x04
 	ACCEL_INT_EN_SLOW_NO_MOTION_SEL = 0x08
-	ACCEL_INT_STATUS_SLOW_NO_MOT    = 0x08
 )
 
-// Accelerometer interrupt mapping
+// Accelerometer interrupt status bits (register 0x09 INT_STATUS_0)
 const (
+	ACCEL_INT_STATUS_SLOPE       = 0x04 // any-motion/slope interrupt
+	ACCEL_INT_STATUS_SLOW_NO_MOT = 0x08 // slow/no-motion interrupt
+)
+
+// Accelerometer interrupt mapping (INT_MAP_0 0x19, INT_MAP_2 0x1B)
+const (
+	ACCEL_INT1_MAP_SLOPE         = 0x04
 	ACCEL_INT1_MAP_SLOW_NO_MOTION = 0x08
+	ACCEL_INT2_MAP_SLOPE         = 0x04
 	ACCEL_INT2_MAP_SLOW_NO_MOTION = 0x08
+)
+
+// Any-motion (slope) threshold and duration registers
+const (
+	ACCEL_SLOPE_DURATION  = 0x27 // bits[1:0] — shared with slo_no_mot_dur bits[7:2]
+	ACCEL_SLOPE_THRESHOLD = 0x28 // 1 LSB = 3.91 mg in 2g range
 )
 
 // Interrupt latch modes

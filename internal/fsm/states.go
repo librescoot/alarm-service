@@ -8,7 +8,7 @@ import (
 // onEnterInit handles entry to init state
 func (sm *StateMachine) onEnterInit(ctx context.Context) {
 	sm.log.Info("entering init state")
-	sm.configureBMX(ctx, InterruptPinINT2, SensitivityLow)
+	sm.configureBMX(ctx, InterruptPinINT2, sensorIdle)
 }
 
 // onEnterWaitingEnabled handles entry to waiting_enabled state
@@ -23,7 +23,7 @@ func (sm *StateMachine) onEnterWaitingEnabled(ctx context.Context) {
 		sm.log.Error("failed to disable interrupt", "error", err)
 	}
 
-	sm.configureBMX(ctx, InterruptPinINT2, SensitivityLow)
+	sm.configureBMX(ctx, InterruptPinINT2, sensorIdle)
 	sm.inhibitor.Release()
 	sm.level2Cycles = 0
 }
@@ -40,7 +40,7 @@ func (sm *StateMachine) onEnterDisarmed(ctx context.Context) {
 		sm.log.Error("failed to disable interrupt", "error", err)
 	}
 
-	sm.configureBMX(ctx, InterruptPinNone, SensitivityLow)
+	sm.configureBMX(ctx, InterruptPinNone, sensorIdle)
 	sm.inhibitor.Release()
 	sm.level2Cycles = 0
 }
@@ -57,7 +57,7 @@ func (sm *StateMachine) onEnterDelayArmed(ctx context.Context) {
 		sm.log.Error("failed to soft reset", "error", err)
 	}
 
-	sm.configureBMX(ctx, InterruptPinINT2, SensitivityLow)
+	sm.configureBMX(ctx, InterruptPinINT2, sensorIdle)
 
 	sm.startTimer("delay_armed", 5*time.Second, func() {
 		sm.SendEvent(DelayArmedTimerEvent{})
@@ -78,7 +78,7 @@ func (sm *StateMachine) onEnterArmed(ctx context.Context) {
 
 	sm.inhibitor.Release()
 
-	sm.configureBMX(ctx, InterruptPinBoth, SensitivityMedium)
+	sm.configureBMX(ctx, InterruptPinBoth, sensorArmed)
 
 	if err := sm.bmxClient.EnableInterrupt(ctx); err != nil {
 		sm.log.Error("failed to enable interrupt", "error", err)
@@ -123,7 +123,7 @@ func (sm *StateMachine) onExitTriggerLevel1Wait(ctx context.Context) {
 func (sm *StateMachine) onEnterTriggerLevel1(ctx context.Context) {
 	sm.log.Info("entering trigger_level_1 state", "check_duration", "5s")
 
-	sm.configureBMX(ctx, InterruptPinBoth, SensitivityMedium)
+	sm.configureBMX(ctx, InterruptPinBoth, sensorLevel1)
 
 	if err := sm.bmxClient.EnableInterrupt(ctx); err != nil {
 		sm.log.Error("failed to enable interrupt", "error", err)
@@ -175,7 +175,7 @@ func (sm *StateMachine) onEnterWaitingMovement(ctx context.Context) {
 	sm.alarmController.Start(time.Duration(sm.alarmDuration) * time.Second)
 
 	sm.startTimer("chip_setup", 47*time.Second, func() {
-		sm.configureBMX(sm.ctx, InterruptPinNone, SensitivityHigh)
+		sm.configureBMX(sm.ctx, InterruptPinNone, sensorWaiting)
 		if err := sm.bmxClient.EnableInterrupt(sm.ctx); err != nil {
 			sm.log.Error("failed to enable interrupt", "error", err)
 		}
@@ -209,7 +209,7 @@ func (sm *StateMachine) onEnterSeatboxAccess(ctx context.Context) {
 		sm.log.Error("failed to disable interrupt", "error", err)
 	}
 
-	sm.configureBMX(ctx, InterruptPinNone, SensitivityLow)
+	sm.configureBMX(ctx, InterruptPinNone, sensorIdle)
 }
 
 // onExitSeatboxAccess handles exit from seatbox_access state

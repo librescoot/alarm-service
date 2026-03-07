@@ -225,6 +225,69 @@ func (a *Accelerometer) ClearLatchedInterrupt() error {
 	return nil
 }
 
+// EnableAnyMotionInterrupt enables the slope/any-motion interrupt on all axes.
+// threshold and duration apply to register 0x28 and bits[1:0] of register 0x27.
+// N = duration + 1 consecutive samples must exceed threshold.
+func (a *Accelerometer) EnableAnyMotionInterrupt(threshold, duration byte) error {
+	// Write slope duration into bits[1:0] of 0x27 (shared with slo_no_mot_dur bits[7:2])
+	existing, err := a.ReadByteData(ACCEL_SLOPE_DURATION)
+	if err != nil {
+		return fmt.Errorf("failed to read slope duration register: %w", err)
+	}
+	val := (existing &^ 0x03) | (duration & 0x03)
+	if err := a.WriteByteData(ACCEL_SLOPE_DURATION, val); err != nil {
+		return fmt.Errorf("failed to set slope duration: %w", err)
+	}
+	if err := a.WriteByteData(ACCEL_SLOPE_THRESHOLD, threshold); err != nil {
+		return fmt.Errorf("failed to set slope threshold: %w", err)
+	}
+	intEn := byte(ACCEL_INT_EN_SLOPE_X | ACCEL_INT_EN_SLOPE_Y | ACCEL_INT_EN_SLOPE_Z)
+	if err := a.WriteByteData(ACCEL_INT_EN_0, intEn); err != nil {
+		return fmt.Errorf("failed to enable any-motion interrupt: %w", err)
+	}
+	return nil
+}
+
+// DisableAnyMotionInterrupt disables the slope/any-motion interrupt.
+func (a *Accelerometer) DisableAnyMotionInterrupt() error {
+	if err := a.WriteByteData(ACCEL_INT_EN_0, 0x00); err != nil {
+		return fmt.Errorf("failed to disable any-motion interrupt: %w", err)
+	}
+	return nil
+}
+
+// MapAnyMotionToPins maps the slope/any-motion interrupt to the specified pins.
+func (a *Accelerometer) MapAnyMotionToPins(pin InterruptPin) error {
+	if pin == InterruptPinINT1 || pin == InterruptPinBoth {
+		existing, err := a.ReadByteData(ACCEL_INT_MAP_0)
+		if err != nil {
+			return fmt.Errorf("failed to read INT_MAP_0: %w", err)
+		}
+		if err := a.WriteByteData(ACCEL_INT_MAP_0, existing|ACCEL_INT1_MAP_SLOPE); err != nil {
+			return fmt.Errorf("failed to map any-motion to INT1: %w", err)
+		}
+	}
+	if pin == InterruptPinINT2 || pin == InterruptPinBoth {
+		existing, err := a.ReadByteData(ACCEL_INT_MAP_2)
+		if err != nil {
+			return fmt.Errorf("failed to read INT_MAP_2: %w", err)
+		}
+		if err := a.WriteByteData(ACCEL_INT_MAP_2, existing|ACCEL_INT2_MAP_SLOPE); err != nil {
+			return fmt.Errorf("failed to map any-motion to INT2: %w", err)
+		}
+	}
+	return nil
+}
+
+// GetAnyMotionInterruptStatus reads and checks if a slope/any-motion interrupt occurred.
+func (a *Accelerometer) GetAnyMotionInterruptStatus() (bool, error) {
+	status, err := a.ReadByteData(ACCEL_INT_STATUS_0)
+	if err != nil {
+		return false, fmt.Errorf("failed to read interrupt status: %w", err)
+	}
+	return (status & ACCEL_INT_STATUS_SLOPE) != 0, nil
+}
+
 // SetBandwidth sets the accelerometer low-pass filter bandwidth (register PMU_BW 0x10).
 // This controls the sample rate (ODR = 2 × BW) and therefore the time window over which
 // the slow/no-motion slope is computed. Must be called after every soft reset since the

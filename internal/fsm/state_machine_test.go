@@ -10,15 +10,15 @@ import (
 
 // Mock implementations for testing
 type mockBMXClient struct {
-	sensitivity      Sensitivity
+	lastConfig       SensorConfig
 	interruptPin     InterruptPin
 	interruptEnabled bool
 	resetCalled      int
 	interruptStatus  bool
 }
 
-func (m *mockBMXClient) SetSensitivity(ctx context.Context, sens Sensitivity) error {
-	m.sensitivity = sens
+func (m *mockBMXClient) ConfigureSensor(ctx context.Context, cfg SensorConfig) error {
+	m.lastConfig = cfg
 	return nil
 }
 
@@ -225,8 +225,8 @@ func TestStateMachine_DelayArmedToArmed(t *testing.T) {
 		t.Error("expected suspend inhibitor to be released in armed state")
 	}
 
-	if bmx.sensitivity != SensitivityMedium {
-		t.Errorf("expected sensitivity MEDIUM, got %s", bmx.sensitivity)
+	if !bmx.lastConfig.AnyMotion {
+		t.Error("expected any-motion mode in armed state")
 	}
 
 	if !bmx.interruptEnabled {
@@ -275,8 +275,8 @@ func TestStateMachine_Level1WaitToLevel1(t *testing.T) {
 		t.Errorf("expected StateTriggerLevel1, got %s", sm.State())
 	}
 
-	if bmx.sensitivity != SensitivityMedium {
-		t.Errorf("expected sensitivity MEDIUM, got %s", bmx.sensitivity)
+	if bmx.lastConfig.AnyMotion {
+		t.Error("expected slow-motion mode in level 1 state")
 	}
 
 	if !bmx.interruptEnabled {
@@ -576,16 +576,16 @@ func TestStateMachine_AlarmStopsOnLevel2Exit(t *testing.T) {
 
 func TestStateMachine_BMXConfigurationInStates(t *testing.T) {
 	tests := []struct {
-		state        State
-		expectedPin  InterruptPin
-		expectedSens Sensitivity
+		state           State
+		expectedPin     InterruptPin
+		expectedAnyMot  bool
 	}{
-		{StateInit, InterruptPinINT2, SensitivityLow},
-		{StateWaitingEnabled, InterruptPinINT2, SensitivityLow},
-		{StateDisarmed, InterruptPinNone, SensitivityLow},
-		{StateDelayArmed, InterruptPinINT2, SensitivityLow},
-		{StateArmed, InterruptPinBoth, SensitivityMedium},
-		{StateTriggerLevel1, InterruptPinBoth, SensitivityMedium},
+		{StateInit, InterruptPinINT2, false},
+		{StateWaitingEnabled, InterruptPinINT2, false},
+		{StateDisarmed, InterruptPinNone, false},
+		{StateDelayArmed, InterruptPinINT2, false},
+		{StateArmed, InterruptPinBoth, true},
+		{StateTriggerLevel1, InterruptPinBoth, false},
 	}
 
 	for _, tt := range tests {
@@ -599,8 +599,8 @@ func TestStateMachine_BMXConfigurationInStates(t *testing.T) {
 			t.Errorf("state %s: expected pin %s, got %s", tt.state, tt.expectedPin, bmx.interruptPin)
 		}
 
-		if bmx.sensitivity != tt.expectedSens {
-			t.Errorf("state %s: expected sensitivity %s, got %s", tt.state, tt.expectedSens, bmx.sensitivity)
+		if bmx.lastConfig.AnyMotion != tt.expectedAnyMot {
+			t.Errorf("state %s: expected AnyMotion=%v, got %v", tt.state, tt.expectedAnyMot, bmx.lastConfig.AnyMotion)
 		}
 	}
 }

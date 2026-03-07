@@ -111,9 +111,32 @@ type StateMachine struct {
 	seatboxLockClosed   bool
 }
 
+// SensorConfig mirrors hwbmx.SensorConfig at the FSM layer to avoid an import cycle.
+type SensorConfig struct {
+	AnyMotion bool // true = any-motion engine; false = slow-motion engine
+	Bandwidth byte // PMU_BW register value; 0x08=7.81Hz, 0x09=15.63Hz, 0x0A=31.25Hz
+	Threshold byte // 1 LSB = 3.91 mg in 2g range
+	Duration  byte // N = dur+1 consecutive samples
+}
+
+// Per-state sensor configurations.
+var (
+	// sensorIdle: low-BW slow-motion used in init/delay/disarmed states (interrupt disabled).
+	sensorIdle = SensorConfig{AnyMotion: false, Bandwidth: 0x08, Threshold: 0x14, Duration: 0x02}
+
+	// sensorArmed: any-motion at 31.25 Hz — catches dog bumps and brief contact (~32 ms).
+	sensorArmed = SensorConfig{AnyMotion: true, Bandwidth: 0x0A, Threshold: 0x04, Duration: 0x01}
+
+	// sensorLevel1: slow-motion at 15.63 Hz — confirms deliberate push/tilt (~256 ms).
+	sensorLevel1 = SensorConfig{AnyMotion: false, Bandwidth: 0x09, Threshold: 0x08, Duration: 0x03}
+
+	// sensorWaiting: slow-motion at 7.81 Hz — conservative re-trigger for L2 (~512 ms).
+	sensorWaiting = SensorConfig{AnyMotion: false, Bandwidth: 0x08, Threshold: 0x06, Duration: 0x03}
+)
+
 // BMXClient interface for BMX commands
 type BMXClient interface {
-	SetSensitivity(ctx context.Context, sens Sensitivity) error
+	ConfigureSensor(ctx context.Context, cfg SensorConfig) error
 	SetInterruptPin(ctx context.Context, pin InterruptPin) error
 	SoftReset(ctx context.Context) error
 	EnableInterrupt(ctx context.Context) error
@@ -304,17 +327,21 @@ func (sm *StateMachine) stateToStatus(state State) string {
 	}
 }
 
-// configureBMX sends configuration commands to BMX service
-func (sm *StateMachine) configureBMX(ctx context.Context, pin InterruptPin, sens Sensitivity) {
+// configureBMX sends configuration commands to BMX hardware.
+func (sm *StateMachine) configureBMX(ctx context.Context, pin InterruptPin, cfg SensorConfig) {
 	if err := sm.bmxClient.SetInterruptPin(ctx, pin); err != nil {
 		sm.log.Error("failed to set interrupt pin", "pin", pin, "error", err)
 	}
 
-	if err := sm.bmxClient.SetSensitivity(ctx, sens); err != nil {
-		sm.log.Error("failed to set sensitivity", "sensitivity", sens, "error", err)
+	if err := sm.bmxClient.ConfigureSensor(ctx, cfg); err != nil {
+		sm.log.Error("failed to configure sensor", "error", err)
 	}
 
-	sm.log.Info("configured BMX", "pin", pin, "sensitivity", sens)
+	mode := "slow-motion"
+	if cfg.AnyMotion {
+		mode = "any-motion"
+	}
+	sm.log.Info("configured BMX", "pin", pin, "mode", mode, "bw", cfg.Bandwidth, "threshold", cfg.Threshold, "duration", cfg.Duration)
 }
 
 // startTimer starts a timer
