@@ -72,7 +72,7 @@ func (p *InterruptPoller) Run(ctx context.Context) {
 
 // checkInterrupt checks if an interrupt has occurred and publishes to Redis
 func (p *InterruptPoller) checkInterrupt(ctx context.Context) error {
-	triggered, err := p.accel.GetInterruptStatus()
+	triggered, err := p.accel.GetMotionInterruptStatus()
 	if err != nil {
 		return err
 	}

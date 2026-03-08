@@ -217,6 +217,18 @@ func (a *Accelerometer) GetInterruptStatus() (bool, error) {
 	return (status & ACCEL_INT_STATUS_SLOW_NO_MOT) != 0, nil
 }
 
+// GetMotionInterruptStatus reads ACCEL_INT_STATUS_0 and returns true if either
+// the slope/any-motion (0x04) or slow/no-motion (0x08) interrupt bit is set.
+// Use this in the poller so it works regardless of which engine is currently active.
+func (a *Accelerometer) GetMotionInterruptStatus() (bool, error) {
+	status, err := a.ReadByteData(ACCEL_INT_STATUS_0)
+	if err != nil {
+		return false, fmt.Errorf("failed to read interrupt status: %w", err)
+	}
+
+	return (status & (ACCEL_INT_STATUS_SLOPE | ACCEL_INT_STATUS_SLOW_NO_MOT)) != 0, nil
+}
+
 // ClearLatchedInterrupt clears a latched interrupt
 func (a *Accelerometer) ClearLatchedInterrupt() error {
 	if err := a.WriteByteData(ACCEL_INT_RST_LATCH, 0x80); err != nil {
