@@ -30,6 +30,7 @@ func (sm *StateMachine) getTransition(event Event) State {
 					// (e.g. motion that woke the system from hibernation)
 					if motionDetected, err := sm.bmxClient.CheckInterruptStatus(sm.ctx); err == nil && motionDetected {
 						sm.log.Info("motion detected before startup, triggering L1")
+						sm.initWakeL1 = true
 						return StateTriggerLevel1Wait
 					}
 					return StateArmed

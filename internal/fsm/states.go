@@ -103,7 +103,10 @@ func (sm *StateMachine) onEnterTriggerLevel1Wait(ctx context.Context) {
 		sm.log.Error("failed to blink hazards", "error", err)
 	}
 
-	if sm.hairTriggerEnabled {
+	if sm.initWakeL1 {
+		sm.log.Info("skipping hair trigger on startup wake (stale BMX latch)")
+		sm.initWakeL1 = false
+	} else if sm.hairTriggerEnabled {
 		sm.log.Info("hair trigger active, starting short alarm", "duration", sm.hairTriggerDuration)
 		sm.alarmController.Start(time.Duration(sm.hairTriggerDuration) * time.Second)
 	}

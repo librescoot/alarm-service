@@ -131,10 +131,6 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	defer a.subscriber.Stop()
 
-	if err := a.subscriber.CheckBMXInitialized(); err != nil {
-		a.log.Warn("failed to check BMX initialized state", "error", err)
-	}
-
 	go a.stateMachine.Run(ctx)
 
 	<-ctx.Done()

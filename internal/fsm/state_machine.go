@@ -109,6 +109,7 @@ type StateMachine struct {
 	l1CooldownDuration  int
 	preSeatboxState     State
 	seatboxLockClosed   bool
+	initWakeL1          bool // L1 triggered from stale BMX latch during startup
 }
 
 // SensorConfig mirrors hwbmx.SensorConfig at the FSM layer to avoid an import cycle.

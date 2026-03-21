@@ -147,7 +147,10 @@ func (s *Subscriber) setupSettingsWatcher() {
 	})
 }
 
-// Start starts all watchers with initial state sync
+// Start starts all watchers with initial state sync and signals the FSM to
+// leave StateInit. StartWithSync delivers current field values via OnField
+// callbacks before returning, so the FSM receives AlarmModeChangedEvent and
+// VehicleStateChangedEvent before InitCompleteEvent — no separate read needed.
 func (s *Subscriber) Start() error {
 	s.log.Info("starting hash watchers with initial sync")
 
@@ -158,6 +161,8 @@ func (s *Subscriber) Start() error {
 	if err := s.settingsWatcher.StartWithSync(); err != nil {
 		return fmt.Errorf("failed to start settings watcher: %w", err)
 	}
+
+	s.sm.SendEvent(fsm.InitCompleteEvent{})
 
 	s.log.Info("starting BMX interrupt subscription")
 	var err error
@@ -173,35 +178,6 @@ func (s *Subscriber) Start() error {
 		return fmt.Errorf("failed to subscribe to bmx:interrupt: %w", err)
 	}
 
-	return nil
-}
-
-// CheckBMXInitialized checks if BMX service is already initialized.
-// It synchronously reads alarm.enabled and vehicle state to ensure
-// the FSM has correct state before processing InitCompleteEvent.
-func (s *Subscriber) CheckBMXInitialized() error {
-	bmxInitialized, err := s.ipc.HGet("bmx", "initialized")
-	if err != nil || bmxInitialized != "true" {
-		return nil
-	}
-
-	s.log.Info("BMX service already initialized")
-
-	// Ensure alarm.enabled and vehicle state are sent before InitCompleteEvent,
-	// since StartWithSync callback ordering is not guaranteed
-	if alarmEnabled, err := s.ipc.HGet("settings", "alarm.enabled"); err == nil {
-		enabled := alarmEnabled == "true"
-		s.log.Info("init: alarm enabled", "enabled", enabled)
-		s.sm.SendEvent(fsm.AlarmModeChangedEvent{Enabled: enabled})
-	}
-
-	if vehicleState, err := s.ipc.HGet("vehicle", "state"); err == nil {
-		state := fsm.ParseVehicleState(vehicleState)
-		s.log.Info("init: vehicle state", "state", state.String())
-		s.sm.SendEvent(fsm.VehicleStateChangedEvent{State: state})
-	}
-
-	s.sm.SendEvent(fsm.InitCompleteEvent{})
 	return nil
 }
 
