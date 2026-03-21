@@ -95,13 +95,21 @@ func (a *Accelerometer) ReadDataInG() (x, y, z, magnitude float64, err error) {
 	return x, y, z, magnitude, nil
 }
 
-// ConfigureSlowNoMotion configures slow/no-motion detection
+// ConfigureSlowNoMotion configures slow/no-motion detection.
+// Register 0x27 is shared: slo_no_mot_dur occupies bits[7:2], slope_dur occupies bits[1:0].
+// The duration parameter is the logical slo_no_mot_dur value (0-63) and must be shifted
+// into bits[7:2]. Bits[1:0] (slope_dur) are preserved via read-modify-write.
 func (a *Accelerometer) ConfigureSlowNoMotion(threshold, duration byte) error {
 	if err := a.WriteByteData(ACCEL_SLO_NO_MOT_THRESHOLD, threshold); err != nil {
 		return fmt.Errorf("failed to set slow/no-motion threshold: %w", err)
 	}
 
-	if err := a.WriteByteData(ACCEL_SLO_NO_MOT_DURATION, duration); err != nil {
+	existing, err := a.ReadByteData(ACCEL_SLO_NO_MOT_DURATION)
+	if err != nil {
+		return fmt.Errorf("failed to read duration register: %w", err)
+	}
+	val := (existing & 0x03) | (duration << 2)
+	if err := a.WriteByteData(ACCEL_SLO_NO_MOT_DURATION, val); err != nil {
 		return fmt.Errorf("failed to set slow/no-motion duration: %w", err)
 	}
 
@@ -229,9 +237,12 @@ func (a *Accelerometer) GetMotionInterruptStatus() (bool, error) {
 	return (status & (ACCEL_INT_STATUS_SLOPE | ACCEL_INT_STATUS_SLOW_NO_MOT)) != 0, nil
 }
 
-// ClearLatchedInterrupt clears a latched interrupt
+// ClearLatchedInterrupt clears a latched interrupt while preserving latched mode.
+// Register 0x21 contains both reset_int (bit 7, write-only) and latch_int (bits 3:0).
+// Writing 0x80 alone would reset latch_int to 0x00 (non-latched), causing subsequent
+// interrupts to auto-clear before the 100ms poller can detect them.
 func (a *Accelerometer) ClearLatchedInterrupt() error {
-	if err := a.WriteByteData(ACCEL_INT_RST_LATCH, 0x80); err != nil {
+	if err := a.WriteByteData(ACCEL_INT_RST_LATCH, 0x80|ACCEL_INT_LATCHED); err != nil {
 		return fmt.Errorf("failed to clear latched interrupt: %w", err)
 	}
 	return nil
