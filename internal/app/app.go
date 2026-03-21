@@ -150,17 +150,28 @@ func (a *App) unbindDrivers() error {
 	return nil
 }
 
-// initBMXHardware initializes the BMX hardware
+// initBMXHardware initializes the BMX hardware with retries.
+// The BMX055 may not be ready on the I2C bus immediately after boot,
+// especially when the kernel driver was just unbound.
 func (a *App) initBMXHardware() error {
+	const maxRetries = 5
 	var err error
 
-	a.log.Info("initializing accelerometer")
-	a.accel, err = hwbmx.NewAccelerometer(a.cfg.I2CBus)
+	for attempt := range maxRetries {
+		a.accel, err = hwbmx.NewAccelerometer(a.cfg.I2CBus)
+		if err == nil {
+			break
+		}
+		if attempt < maxRetries-1 {
+			delay := time.Duration(100<<attempt) * time.Millisecond // 100, 200, 400, 800ms
+			a.log.Warn("accelerometer init failed, retrying", "attempt", attempt+1, "delay", delay, "error", err)
+			time.Sleep(delay)
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("init accelerometer: %w", err)
 	}
 
-	a.log.Info("initializing gyroscope")
 	a.gyro, err = hwbmx.NewGyroscope(a.cfg.I2CBus)
 	if err != nil {
 		return fmt.Errorf("init gyroscope: %w", err)
