@@ -93,6 +93,14 @@ func (a *App) Run(ctx context.Context) error {
 
 	a.bmxController = bmx.NewHardwareController(a.accel, a.gyro, a.interruptPoller, a.log)
 
+	// Configure BMX to idle before the FSM starts
+	if err := a.bmxController.SetInterruptPin(ctx, fsm.InterruptPinINT2); err != nil {
+		a.log.Warn("failed to set initial interrupt pin", "error", err)
+	}
+	if err := a.bmxController.ConfigureSensor(ctx, fsm.SensorConfig{Bandwidth: 0x08, Threshold: 0x14, Duration: 0x02}); err != nil {
+		a.log.Warn("failed to configure initial sensor", "error", err)
+	}
+
 	a.alarmController, err = alarm.NewController(a.cfg.RedisAddr, a.cfg.HornEnabled, a.log)
 	if err != nil {
 		return fmt.Errorf("create alarm controller: %w", err)
@@ -126,12 +134,13 @@ func (a *App) Run(ctx context.Context) error {
 		a.log.Warn("failed to handle CLI overrides", "error", err)
 	}
 
+	// Start FSM before subscribers so it's ready to process events
+	go a.stateMachine.Run(ctx)
+
 	if err := a.subscriber.Start(); err != nil {
 		return fmt.Errorf("start subscriber: %w", err)
 	}
 	defer a.subscriber.Stop()
-
-	go a.stateMachine.Run(ctx)
 
 	<-ctx.Done()
 	a.log.Info("shutting down")

@@ -28,7 +28,7 @@ func NewSubscriber(client *Client, sm *fsm.StateMachine, log *slog.Logger) *Subs
 		ipc:                   client.ipc,
 		log:                   log,
 		sm:                    sm,
-		seatboxTriggerEnabled: true, // default: seatbox opening can trigger alarm
+		seatboxTriggerEnabled: true,
 	}
 
 	s.setupVehicleWatcher()
@@ -42,38 +42,41 @@ func (s *Subscriber) setupVehicleWatcher() {
 	s.vehicleWatcher.OnField("state", func(stateStr string) error {
 		state := fsm.ParseVehicleState(stateStr)
 		s.log.Debug("vehicle state changed", "state", state.String())
-		s.sm.SendEvent(fsm.VehicleStateChangedEvent{State: state})
+		s.sm.SendEvent(fsm.NewVehicleStateChangedEvent(state))
 		return nil
 	})
 
 	s.vehicleWatcher.OnEvent("seatbox:opened", func() error {
 		s.log.Info("authorized seatbox opening detected")
-		s.sm.SendEvent(fsm.SeatboxOpenedEvent{})
+		s.sm.SendEvent(fsm.NewSeatboxOpenedEvent())
 		return nil
 	})
 
 	s.vehicleWatcher.OnField("seatbox:lock", func(lockState string) error {
 		s.log.Debug("seatbox lock state changed", "state", lockState)
-		if lockState == "closed" {
-			s.sm.SendEvent(fsm.SeatboxClosedEvent{})
-		} else if lockState == "open" {
+		switch lockState {
+		case "closed":
+			s.sm.SendEvent(fsm.NewSeatboxClosedEvent())
+		case "open":
 			currentState := s.sm.State()
 			if currentState == fsm.StateSeatboxAccess {
 				return nil
 			}
 			if !s.seatboxTriggerEnabled {
 				s.log.Info("seatbox opened, treating as authorized (seatbox-trigger disabled)")
-				s.sm.SendEvent(fsm.SeatboxOpenedEvent{})
+				s.sm.SendEvent(fsm.NewSeatboxOpenedEvent())
 			} else {
-				s.log.Warn("unauthorized seatbox opening detected", "current_state", currentState.String())
-				s.sm.SendEvent(fsm.UnauthorizedSeatboxEvent{})
+				s.log.Warn("unauthorized seatbox opening detected", "current_state", string(currentState))
+				s.sm.SendEvent(fsm.NewUnauthorizedSeatboxEvent())
 			}
 		}
 		return nil
 	})
 }
 
-// setupSettingsWatcher registers handlers for alarm settings changes
+// setupSettingsWatcher registers handlers for alarm settings changes.
+// State-changing settings (alarm.enabled) go through the FSM.
+// Tuning parameters are applied directly via thread-safe setters.
 func (s *Subscriber) setupSettingsWatcher() {
 	s.settingsWatcher.OnField("alarm.enabled", func(alarmEnabled string) error {
 		enabled := alarmEnabled == "true"
@@ -84,18 +87,18 @@ func (s *Subscriber) setupSettingsWatcher() {
 			if err == nil {
 				state := fsm.ParseVehicleState(vehicleState)
 				s.log.Debug("sending current vehicle state before alarm enable", "state", state.String())
-				s.sm.SendEvent(fsm.VehicleStateChangedEvent{State: state})
+				s.sm.SendEvent(fsm.NewVehicleStateChangedEvent(state))
 			}
 		}
 
-		s.sm.SendEvent(fsm.AlarmModeChangedEvent{Enabled: enabled})
+		s.sm.SendEvent(fsm.NewAlarmModeChangedEvent(enabled))
 		return nil
 	})
 
 	s.settingsWatcher.OnField("alarm.honk", func(hornEnabled string) error {
 		enabled := hornEnabled == "true"
 		s.log.Debug("alarm honk changed", "enabled", enabled)
-		s.sm.SendEvent(fsm.HornSettingChangedEvent{Enabled: enabled})
+		s.sm.SetHornEnabled(enabled)
 		return nil
 	})
 
@@ -105,8 +108,7 @@ func (s *Subscriber) setupSettingsWatcher() {
 			s.log.Error("invalid alarm.duration value", "value", durationStr, "error", err)
 			return nil
 		}
-		s.log.Debug("alarm duration changed", "duration", duration)
-		s.sm.SendEvent(fsm.AlarmDurationChangedEvent{Duration: duration})
+		s.sm.SetAlarmDuration(duration)
 		return nil
 	})
 
@@ -120,7 +122,7 @@ func (s *Subscriber) setupSettingsWatcher() {
 	s.settingsWatcher.OnField("alarm.hairtrigger", func(hairTrigger string) error {
 		enabled := hairTrigger == "true"
 		s.log.Debug("hair trigger setting changed", "enabled", enabled)
-		s.sm.SendEvent(fsm.HairTriggerSettingChangedEvent{Enabled: enabled})
+		s.sm.SetHairTriggerEnabled(enabled)
 		return nil
 	})
 
@@ -130,8 +132,7 @@ func (s *Subscriber) setupSettingsWatcher() {
 			s.log.Error("invalid alarm.hairtrigger-duration value", "value", durationStr, "error", err)
 			return nil
 		}
-		s.log.Debug("hair trigger duration changed", "duration", duration)
-		s.sm.SendEvent(fsm.HairTriggerDurationChangedEvent{Duration: duration})
+		s.sm.SetHairTriggerDuration(duration)
 		return nil
 	})
 
@@ -141,16 +142,13 @@ func (s *Subscriber) setupSettingsWatcher() {
 			s.log.Error("invalid alarm.l1-cooldown value", "value", durationStr, "error", err)
 			return nil
 		}
-		s.log.Debug("L1 cooldown duration changed", "duration", duration)
-		s.sm.SendEvent(fsm.L1CooldownDurationChangedEvent{Duration: duration})
+		s.sm.SetL1CooldownDuration(duration)
 		return nil
 	})
 }
 
 // Start starts all watchers with initial state sync and signals the FSM to
-// leave StateInit. StartWithSync delivers current field values via OnField
-// callbacks before returning, so the FSM receives AlarmModeChangedEvent and
-// VehicleStateChangedEvent before InitCompleteEvent — no separate read needed.
+// leave StateInit.
 func (s *Subscriber) Start() error {
 	s.log.Info("starting hash watchers with initial sync")
 
@@ -162,16 +160,13 @@ func (s *Subscriber) Start() error {
 		return fmt.Errorf("failed to start settings watcher: %w", err)
 	}
 
-	s.sm.SendEvent(fsm.InitCompleteEvent{})
+	s.sm.SendEvent(fsm.NewInitCompleteEvent())
 
 	s.log.Info("starting BMX interrupt subscription")
 	var err error
 	s.bmxWatcher, err = ipc.Subscribe(s.ipc, "bmx:interrupt", func(payload string) error {
 		s.log.Info("BMX interrupt received", "payload", payload)
-		s.sm.SendEvent(fsm.BMXInterruptEvent{
-			Timestamp: 0,
-			Data:      payload,
-		})
+		s.sm.SendEvent(fsm.NewBMXInterruptEvent(payload))
 		return nil
 	})
 	if err != nil {

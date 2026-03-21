@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/godbus/dbus/v5 v5.2.2
+	github.com/librescoot/librefsm v0.3.3
 	github.com/librescoot/redis-ipc v0.10.3
 	golang.org/x/sys v0.41.0
 )

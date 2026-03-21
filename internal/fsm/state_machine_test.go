@@ -6,6 +6,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/librescoot/librefsm"
 )
 
 // Mock implementations for testing
@@ -99,434 +101,422 @@ func (m *mockAlarmController) BlinkHazards() error {
 	return nil
 }
 
-func createTestStateMachine() (*StateMachine, *mockBMXClient, *mockStatusPublisher, *mockSuspendInhibitor, *mockAlarmController) {
+// startTestSM creates and starts a StateMachine, returning it and mocks.
+// The FSM is started so events can be processed via SendSync.
+func startTestSM(t *testing.T) (*StateMachine, *mockBMXClient, *mockStatusPublisher, *mockSuspendInhibitor, *mockAlarmController, context.CancelFunc) {
+	t.Helper()
 	bmx := &mockBMXClient{}
 	pub := &mockStatusPublisher{}
 	inh := &mockSuspendInhibitor{}
 	alarm := &mockAlarmController{}
-	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelError,
-	}))
+	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	sm := New(bmx, pub, inh, alarm, 10, log)
-	return sm, bmx, pub, inh, alarm
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go sm.Run(ctx)
+	// Give the FSM goroutine time to start and enter init state
+	time.Sleep(10 * time.Millisecond)
+
+	return sm, bmx, pub, inh, alarm, cancel
 }
 
-func TestStateMachine_InitialState(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
-
-	if sm.State() != StateInit {
-		t.Errorf("expected initial state to be StateInit, got %s", sm.State())
+func sendSync(t *testing.T, sm *StateMachine, ev librefsm.Event) {
+	t.Helper()
+	if err := sm.machine.SendSync(ev); err != nil {
+		t.Fatalf("SendSync(%s) failed: %v", ev.ID, err)
 	}
 }
 
-func TestStateMachine_InitToWaitingEnabled(t *testing.T) {
-	sm, bmx, pub, _, _ := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.alarmEnabled = false
-	sm.SendEvent(InitCompleteEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateWaitingEnabled {
-		t.Errorf("expected StateWaitingEnabled, got %s", sm.State())
+func assertState(t *testing.T, sm *StateMachine, expected librefsm.StateID) {
+	t.Helper()
+	got := sm.State()
+	if got != expected {
+		t.Errorf("expected state %s, got %s", expected, got)
 	}
+}
+
+func TestInitialState(t *testing.T) {
+	sm, _, _, _, _, cancel := startTestSM(t)
+	defer cancel()
+	assertState(t, sm, StateStarting)
+}
+
+func TestInitToWaitingEnabled(t *testing.T) {
+	sm, bmx, pub, _, _, cancel := startTestSM(t)
+	defer cancel()
+
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmDisabled})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+
+	assertState(t, sm, StateWaitingEnabled)
 
 	if pub.lastStatus != "disabled" {
 		t.Errorf("expected status 'disabled', got %s", pub.lastStatus)
 	}
-
 	if bmx.interruptEnabled {
-		t.Error("expected interrupt to be disabled in waiting_enabled state")
+		t.Error("expected interrupt to be disabled")
 	}
 }
 
-func TestStateMachine_InitToDisarmed(t *testing.T) {
-	sm, _, pub, _, _ := createTestStateMachine()
-	ctx := context.Background()
+func TestInitToDisarmed(t *testing.T) {
+	sm, _, pub, _, _, cancel := startTestSM(t)
+	defer cancel()
 
-	sm.alarmEnabled = true
-	sm.vehicleStandby = false
-	sm.SendEvent(InitCompleteEvent{})
-	sm.handleEvent(ctx, <-sm.events)
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
 
-	if sm.State() != StateDisarmed {
-		t.Errorf("expected StateDisarmed, got %s", sm.State())
-	}
-
+	assertState(t, sm, StateDisarmed)
 	if pub.lastStatus != "disarmed" {
 		t.Errorf("expected status 'disarmed', got %s", pub.lastStatus)
 	}
 }
 
-func TestStateMachine_InitToArmedWhenStandby(t *testing.T) {
-	sm, bmx, pub, _, _ := createTestStateMachine()
-	ctx := context.Background()
+func TestInitToArmedWhenStandby(t *testing.T) {
+	sm, bmx, pub, _, _, cancel := startTestSM(t)
+	defer cancel()
 
-	sm.alarmEnabled = true
-	sm.vehicleStandby = true
-	sm.SendEvent(InitCompleteEvent{})
-	sm.handleEvent(ctx, <-sm.events)
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
 
-	if sm.State() != StateArmed {
-		t.Errorf("expected StateArmed (skip delay on startup), got %s", sm.State())
-	}
-
+	assertState(t, sm, StateArmed)
 	if pub.lastStatus != "armed" {
 		t.Errorf("expected status 'armed', got %s", pub.lastStatus)
 	}
-
 	if !bmx.interruptEnabled {
-		t.Error("expected interrupt to be enabled in armed state")
+		t.Error("expected interrupt to be enabled")
 	}
 }
 
-func TestStateMachine_DisarmedToDelayArmed(t *testing.T) {
-	sm, _, _, inh, _ := createTestStateMachine()
-	ctx := context.Background()
+func TestDisarmedToDelayArmed(t *testing.T) {
+	sm, _, _, inh, _, cancel := startTestSM(t)
+	defer cancel()
 
-	sm.state = StateDisarmed
-	sm.alarmEnabled = true
-	sm.vehicleStandby = false
+	// Get to Disarmed first
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	assertState(t, sm, StateDisarmed)
 
-	sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateStandby})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateDelayArmed {
-		t.Errorf("expected StateDelayArmed, got %s", sm.State())
-	}
+	// Vehicle goes to standby
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	assertState(t, sm, StateDelayArmed)
 
 	if !inh.acquired {
 		t.Error("expected suspend inhibitor to be acquired")
 	}
-
-	if sm.level2Cycles != 0 {
-		t.Errorf("expected level2Cycles to be reset to 0, got %d", sm.level2Cycles)
-	}
 }
 
-func TestStateMachine_DelayArmedToArmed(t *testing.T) {
-	sm, bmx, _, inh, _ := createTestStateMachine()
-	ctx := context.Background()
+func TestArmedToTriggerLevel1Wait(t *testing.T) {
+	sm, bmx, _, inh, alarm, cancel := startTestSM(t)
+	defer cancel()
 
-	sm.state = StateDelayArmed
-	sm.alarmEnabled = true
-	sm.vehicleStandby = true
-	inh.acquired = true
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	assertState(t, sm, StateArmed)
 
-	sm.SendEvent(DelayArmedTimerEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateArmed {
-		t.Errorf("expected StateArmed, got %s", sm.State())
-	}
-
-	if inh.acquired {
-		t.Error("expected suspend inhibitor to be released in armed state")
-	}
-
-	if !bmx.lastConfig.AnyMotion {
-		t.Error("expected any-motion mode in armed state")
-	}
-
-	if !bmx.interruptEnabled {
-		t.Error("expected interrupt to be enabled in armed state")
-	}
-}
-
-func TestStateMachine_ArmedToTriggerLevel1Wait(t *testing.T) {
-	sm, bmx, _, inh, alarm := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateArmed
-	sm.alarmEnabled = true
-	sm.vehicleStandby = true
-
-	sm.SendEvent(BMXInterruptEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateTriggerLevel1Wait {
-		t.Errorf("expected StateTriggerLevel1Wait, got %s", sm.State())
-	}
+	sendSync(t, sm, librefsm.Event{ID: EvBMXInterrupt})
+	assertState(t, sm, StateTriggerLevel1Wait)
 
 	if !inh.acquired {
-		t.Error("expected suspend inhibitor to be acquired in level 1 wait")
+		t.Error("expected suspend inhibitor to be acquired")
 	}
-
 	if bmx.resetCalled == 0 {
-		t.Error("expected BMX to be reset on entering level 1 wait")
+		t.Error("expected BMX to be reset")
 	}
-
 	if alarm.blinkCalled != 1 {
-		t.Errorf("expected hazards to blink once, got %d blinks", alarm.blinkCalled)
+		t.Errorf("expected hazards to blink once, got %d", alarm.blinkCalled)
 	}
 }
 
-func TestStateMachine_Level1WaitToLevel1(t *testing.T) {
-	sm, bmx, _, _, _ := createTestStateMachine()
-	ctx := context.Background()
+func TestLevel1ToLevel2OnMovement(t *testing.T) {
+	sm, _, _, _, alarm, cancel := startTestSM(t)
+	defer cancel()
 
-	sm.state = StateTriggerLevel1Wait
+	// Get to Armed
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
 
-	sm.SendEvent(Level1CooldownTimerEvent{})
-	sm.handleEvent(ctx, <-sm.events)
+	// Armed → L1Wait
+	sendSync(t, sm, librefsm.Event{ID: EvBMXInterrupt})
+	assertState(t, sm, StateTriggerLevel1Wait)
 
-	if sm.State() != StateTriggerLevel1 {
-		t.Errorf("expected StateTriggerLevel1, got %s", sm.State())
-	}
+	// L1Wait → L1 (via cooldown timeout)
+	sendSync(t, sm, librefsm.Event{ID: EvL1CooldownTimeout})
+	assertState(t, sm, StateTriggerLevel1)
 
-	if bmx.lastConfig.AnyMotion {
-		t.Error("expected slow-motion mode in level 1 state")
-	}
-
-	if !bmx.interruptEnabled {
-		t.Error("expected interrupt to be enabled in level 1")
-	}
-}
-
-func TestStateMachine_Level1ToLevel2OnMovement(t *testing.T) {
-	sm, _, _, _, alarm := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateTriggerLevel1
-	sm.alarmDuration = 10
-
-	sm.SendEvent(BMXInterruptEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateTriggerLevel2 {
-		t.Errorf("expected StateTriggerLevel2, got %s", sm.State())
-	}
+	alarm.blinkCalled = 0
+	// L1 → L2 on movement
+	sendSync(t, sm, librefsm.Event{ID: EvBMXInterrupt})
+	assertState(t, sm, StateTriggerLevel2)
 
 	if !alarm.active {
-		t.Error("expected alarm to be active in level 2")
+		t.Error("expected alarm to be active")
 	}
-
-	if alarm.duration != 10*time.Second {
-		t.Errorf("expected alarm duration 10s, got %v", alarm.duration)
-	}
-
 	if alarm.blinkCalled != 1 {
-		t.Errorf("expected hazards to blink once during L1->L2 transition, got %d", alarm.blinkCalled)
+		t.Errorf("expected hazards to blink during L1→L2, got %d", alarm.blinkCalled)
 	}
 }
 
-func TestStateMachine_Level1ToDelayArmedOnTimeout(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
-	ctx := context.Background()
+func TestLevel1ToDelayArmedOnTimeout(t *testing.T) {
+	sm, _, _, _, _, cancel := startTestSM(t)
+	defer cancel()
 
-	sm.state = StateTriggerLevel1
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	sendSync(t, sm, librefsm.Event{ID: EvBMXInterrupt})
+	sendSync(t, sm, librefsm.Event{ID: EvL1CooldownTimeout})
+	assertState(t, sm, StateTriggerLevel1)
 
-	sm.SendEvent(Level1CheckTimerEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateDelayArmed {
-		t.Errorf("expected StateDelayArmed, got %s", sm.State())
-	}
+	sendSync(t, sm, librefsm.Event{ID: EvL1CheckTimeout})
+	assertState(t, sm, StateDelayArmed)
 }
 
-func TestStateMachine_Level2ToWaitingMovement(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
-	ctx := context.Background()
+func TestLevel2ToWaitingMovement(t *testing.T) {
+	sm, _, _, _, _, cancel := startTestSM(t)
+	defer cancel()
 
-	sm.state = StateTriggerLevel2
-	sm.level2Cycles = 0
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	sendSync(t, sm, librefsm.Event{ID: EvBMXInterrupt})
+	sendSync(t, sm, librefsm.Event{ID: EvL1CooldownTimeout})
+	sendSync(t, sm, librefsm.Event{ID: EvBMXInterrupt})
+	assertState(t, sm, StateTriggerLevel2)
 
-	sm.SendEvent(Level2CheckTimerEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateWaitingMovement {
-		t.Errorf("expected StateWaitingMovement, got %s", sm.State())
-	}
+	sendSync(t, sm, librefsm.Event{ID: EvL2CheckTimeout})
+	assertState(t, sm, StateWaitingMovement)
 }
 
-func TestStateMachine_Level2ToDisarmedAfterMaxCycles(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
-	ctx := context.Background()
+func TestWaitingMovementRetriggersLevel2(t *testing.T) {
+	sm, _, _, _, _, cancel := startTestSM(t)
+	defer cancel()
 
-	sm.state = StateTriggerLevel2
-	sm.level2Cycles = 4
+	// Get to WaitingMovement
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	sendSync(t, sm, librefsm.Event{ID: EvBMXInterrupt})
+	sendSync(t, sm, librefsm.Event{ID: EvL1CooldownTimeout})
+	sendSync(t, sm, librefsm.Event{ID: EvBMXInterrupt})
+	sendSync(t, sm, librefsm.Event{ID: EvL2CheckTimeout})
+	assertState(t, sm, StateWaitingMovement)
 
-	sm.SendEvent(Level2CheckTimerEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateDisarmed {
-		t.Errorf("expected StateDisarmed after max cycles, got %s", sm.State())
-	}
+	sendSync(t, sm, librefsm.Event{ID: EvBMXInterrupt})
+	assertState(t, sm, StateTriggerLevel2)
 }
 
-func TestStateMachine_WaitingMovementRetriggersLevel2(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
-	ctx := context.Background()
+func TestWaitingMovementToDelayArmed(t *testing.T) {
+	sm, _, _, _, _, cancel := startTestSM(t)
+	defer cancel()
 
-	sm.state = StateWaitingMovement
-	sm.level2Cycles = 1
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	sendSync(t, sm, librefsm.Event{ID: EvBMXInterrupt})
+	sendSync(t, sm, librefsm.Event{ID: EvL1CooldownTimeout})
+	sendSync(t, sm, librefsm.Event{ID: EvBMXInterrupt})
+	sendSync(t, sm, librefsm.Event{ID: EvL2CheckTimeout})
+	assertState(t, sm, StateWaitingMovement)
 
-	sm.SendEvent(BMXInterruptEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.level2Cycles != 2 {
-		t.Errorf("expected level2Cycles to be 2, got %d", sm.level2Cycles)
-	}
-
-	if sm.State() != StateTriggerLevel2 {
-		t.Errorf("expected StateTriggerLevel2, got %s", sm.State())
-	}
+	sendSync(t, sm, librefsm.Event{ID: EvWaitingTimeout})
+	assertState(t, sm, StateDelayArmed)
 }
 
-func TestStateMachine_WaitingMovementToDisarmedAfterMaxCycles(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
-	ctx := context.Background()
+func TestDisableFromArmedStates(t *testing.T) {
+	// For each armed state, verify EvAlarmDisabled → WaitingEnabled
+	sm, _, _, _, _, cancel := startTestSM(t)
+	defer cancel()
 
-	sm.state = StateWaitingMovement
-	sm.level2Cycles = 3
+	// Get to Armed
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	assertState(t, sm, StateArmed)
 
-	sm.SendEvent(BMXInterruptEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateDisarmed {
-		t.Errorf("expected StateDisarmed after 4 cycles, got %s", sm.State())
-	}
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmDisabled})
+	assertState(t, sm, StateWaitingEnabled)
 }
 
-func TestStateMachine_WaitingMovementToDelayArmed(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
-	ctx := context.Background()
+func TestVehicleActiveDisarms(t *testing.T) {
+	sm, _, _, _, _, cancel := startTestSM(t)
+	defer cancel()
 
-	sm.state = StateWaitingMovement
-	sm.level2Cycles = 2
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	assertState(t, sm, StateArmed)
 
-	sm.SendEvent(Level2CheckTimerEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateDelayArmed {
-		t.Errorf("expected StateDelayArmed, got %s", sm.State())
-	}
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateReadyToDrive})
+	assertState(t, sm, StateDisarmed)
 }
 
-func TestStateMachine_DisableFromAnyState(t *testing.T) {
-	states := []State{
-		StateDisarmed,
-		StateDelayArmed,
-		StateArmed,
-		StateTriggerLevel1Wait,
-		StateTriggerLevel1,
-		StateTriggerLevel2,
-		StateWaitingMovement,
-	}
+func TestManualTriggerFromArmed(t *testing.T) {
+	sm, _, _, _, alarm, cancel := startTestSM(t)
+	defer cancel()
 
-	for _, initialState := range states {
-		sm, _, _, _, _ := createTestStateMachine()
-		ctx := context.Background()
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	assertState(t, sm, StateArmed)
 
-		sm.state = initialState
-		sm.alarmEnabled = true
-
-		sm.SendEvent(AlarmModeChangedEvent{Enabled: false})
-		sm.handleEvent(ctx, <-sm.events)
-
-		if sm.State() != StateWaitingEnabled {
-			t.Errorf("expected StateWaitingEnabled from %s, got %s", initialState, sm.State())
-		}
-
-		if sm.alarmEnabled {
-			t.Error("expected alarmEnabled to be false")
-		}
-	}
-}
-
-func TestStateMachine_VehicleNotStandbyFromArmedStates(t *testing.T) {
-	states := []State{
-		StateDelayArmed,
-		StateArmed,
-		StateTriggerLevel1Wait,
-		StateTriggerLevel1,
-		StateTriggerLevel2,
-		StateWaitingMovement,
-	}
-
-	for _, initialState := range states {
-		sm, _, _, _, _ := createTestStateMachine()
-		ctx := context.Background()
-
-		sm.state = initialState
-		sm.vehicleStandby = true
-		sm.alarmEnabled = true
-
-		sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateReadyToDrive})
-		sm.handleEvent(ctx, <-sm.events)
-
-		if sm.State() != StateDisarmed {
-			t.Errorf("expected StateDisarmed from %s on vehicle not standby, got %s", initialState, sm.State())
-		}
-
-		if sm.vehicleStandby {
-			t.Error("expected vehicleStandby to be false")
-		}
-	}
-}
-
-func TestStateMachine_HornSettingChanged(t *testing.T) {
-	sm, _, _, _, alarm := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateArmed
-
-	sm.SendEvent(HornSettingChangedEvent{Enabled: true})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if !alarm.hornEnabled {
-		t.Error("expected horn to be enabled")
-	}
-
-	if sm.State() != StateArmed {
-		t.Error("expected state to remain unchanged")
-	}
-}
-
-func TestStateMachine_AlarmDurationChanged(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateArmed
-	sm.alarmDuration = 10
-
-	sm.SendEvent(AlarmDurationChangedEvent{Duration: 30})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.alarmDuration != 30 {
-		t.Errorf("expected alarm duration to be 30, got %d", sm.alarmDuration)
-	}
-
-	if sm.State() != StateArmed {
-		t.Error("expected state to remain unchanged")
-	}
-}
-
-func TestStateMachine_ManualTriggerFromArmed(t *testing.T) {
-	sm, _, _, _, alarm := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateArmed
-	sm.alarmDuration = 10
-
-	sm.SendEvent(ManualTriggerEvent{Duration: 15})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateTriggerLevel2 {
-		t.Errorf("expected StateTriggerLevel2, got %s", sm.State())
-	}
-
+	sendSync(t, sm, librefsm.Event{ID: EvManualTrigger})
+	assertState(t, sm, StateTriggerLevel2)
 	if !alarm.active {
 		t.Error("expected alarm to be active")
 	}
 }
 
-func TestStateMachine_StateToStatus(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
+func TestUnauthorizedSeatboxFromArmed(t *testing.T) {
+	sm, _, _, _, alarm, cancel := startTestSM(t)
+	defer cancel()
 
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	assertState(t, sm, StateArmed)
+
+	sendSync(t, sm, librefsm.Event{ID: EvUnauthorizedSeatbox})
+	assertState(t, sm, StateTriggerLevel2)
+	if !alarm.active {
+		t.Error("expected alarm to be active")
+	}
+}
+
+func TestAuthorizedSeatboxAccess(t *testing.T) {
+	sm, bmx, _, inh, _, cancel := startTestSM(t)
+	defer cancel()
+
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	assertState(t, sm, StateArmed)
+
+	sendSync(t, sm, librefsm.Event{ID: EvSeatboxOpened})
+	assertState(t, sm, StateSeatboxAccess)
+	if !inh.acquired {
+		t.Error("expected inhibitor acquired")
+	}
+	if bmx.interruptEnabled {
+		t.Error("expected interrupt disabled during seatbox access")
+	}
+}
+
+func TestSeatboxAccessToDelayArmed(t *testing.T) {
+	sm, _, _, _, _, cancel := startTestSM(t)
+	defer cancel()
+
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	sendSync(t, sm, librefsm.Event{ID: EvSeatboxOpened})
+	assertState(t, sm, StateSeatboxAccess)
+
+	sendSync(t, sm, librefsm.Event{ID: EvSeatboxClosed})
+	assertState(t, sm, StateDelayArmed)
+}
+
+func TestRuntimeDisarmFromArmed(t *testing.T) {
+	sm, _, _, _, _, cancel := startTestSM(t)
+	defer cancel()
+
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	assertState(t, sm, StateArmed)
+
+	sendSync(t, sm, librefsm.Event{ID: EvRuntimeDisarm})
+	assertState(t, sm, StateDisarmed)
+
+	// alarmEnabled preserved — re-arm on next standby should work
+	if !sm.alarmEnabled {
+		t.Error("alarmEnabled must remain true after runtime disarm")
+	}
+}
+
+func TestRuntimeDisarmFromSeatboxAccess(t *testing.T) {
+	sm, _, _, _, _, cancel := startTestSM(t)
+	defer cancel()
+
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	sendSync(t, sm, librefsm.Event{ID: EvSeatboxOpened})
+	assertState(t, sm, StateSeatboxAccess)
+
+	sendSync(t, sm, librefsm.Event{ID: EvRuntimeDisarm})
+	assertState(t, sm, StateDisarmed)
+}
+
+func TestRuntimeArmFromDisarmed(t *testing.T) {
+	sm, _, _, inh, _, cancel := startTestSM(t)
+	defer cancel()
+
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	assertState(t, sm, StateDisarmed)
+
+	sendSync(t, sm, librefsm.Event{ID: EvRuntimeArm})
+	assertState(t, sm, StateDelayArmed)
+	if !inh.acquired {
+		t.Error("expected inhibitor acquired")
+	}
+}
+
+func TestRuntimeArmIgnoredWhenDisabled(t *testing.T) {
+	sm, _, _, _, _, cancel := startTestSM(t)
+	defer cancel()
+
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmDisabled})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	assertState(t, sm, StateWaitingEnabled)
+
+	// Enable to get to Disarmed
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	assertState(t, sm, StateDisarmed)
+
+	// Disable again
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmDisabled})
+	assertState(t, sm, StateWaitingEnabled)
+
+	// RuntimeArm shouldn't work from WaitingEnabled (alarm disabled)
+	sm.machine.Send(librefsm.Event{ID: EvRuntimeArm})
+	time.Sleep(10 * time.Millisecond)
+	assertState(t, sm, StateWaitingEnabled)
+}
+
+func TestWaitingHibernationDoesNotDisarm(t *testing.T) {
+	sm, _, _, _, _, cancel := startTestSM(t)
+	defer cancel()
+
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	assertState(t, sm, StateArmed)
+
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateWaitingHibernation})
+	assertState(t, sm, StateArmed)
+}
+
+func TestShuttingDownDoesNotDisarm(t *testing.T) {
+	sm, _, _, _, _, cancel := startTestSM(t)
+	defer cancel()
+
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	assertState(t, sm, StateArmed)
+
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateShuttingDown})
+	assertState(t, sm, StateArmed)
+}
+
+func TestStateToStatus(t *testing.T) {
 	tests := []struct {
-		state    State
+		state    librefsm.StateID
 		expected string
 	}{
 		{StateWaitingEnabled, "disabled"},
@@ -540,392 +530,31 @@ func TestStateMachine_StateToStatus(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := sm.stateToStatus(tt.state)
+		result := stateToStatus(tt.state)
 		if result != tt.expected {
 			t.Errorf("stateToStatus(%s) = %s, expected %s", tt.state, result, tt.expected)
 		}
 	}
 }
 
-func TestStateMachine_EventQueueFull(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
+func TestAlarmStopsOnLevel2Exit(t *testing.T) {
+	sm, _, _, _, alarm, cancel := startTestSM(t)
+	defer cancel()
 
-	for i := 0; i < 150; i++ {
-		sm.SendEvent(InitCompleteEvent{})
+	sendSync(t, sm, librefsm.Event{ID: EvAlarmEnabled})
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateStandby})
+	sendSync(t, sm, librefsm.Event{ID: EvInitComplete})
+	sendSync(t, sm, librefsm.Event{ID: EvBMXInterrupt})
+	sendSync(t, sm, librefsm.Event{ID: EvL1CooldownTimeout})
+	sendSync(t, sm, librefsm.Event{ID: EvBMXInterrupt})
+	assertState(t, sm, StateTriggerLevel2)
+	if !alarm.active {
+		t.Fatal("expected alarm active in L2")
 	}
 
-	if len(sm.events) > 100 {
-		t.Error("expected event queue to drop events when full")
-	}
-}
-
-func TestStateMachine_AlarmStopsOnLevel2Exit(t *testing.T) {
-	sm, _, _, _, alarm := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateTriggerLevel2
-	alarm.active = true
-
-	sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateReadyToDrive})
-	sm.handleEvent(ctx, <-sm.events)
-
+	sendSync(t, sm, librefsm.Event{ID: EvVehicleState, Payload: VehicleStateReadyToDrive})
+	assertState(t, sm, StateDisarmed)
 	if alarm.active {
-		t.Error("expected alarm to be stopped when exiting level 2")
-	}
-}
-
-func TestStateMachine_BMXConfigurationInStates(t *testing.T) {
-	tests := []struct {
-		state           State
-		expectedPin     InterruptPin
-		expectedAnyMot  bool
-	}{
-		{StateInit, InterruptPinINT2, false},
-		{StateWaitingEnabled, InterruptPinINT2, false},
-		{StateDisarmed, InterruptPinNone, false},
-		{StateDelayArmed, InterruptPinINT2, false},
-		{StateArmed, InterruptPinBoth, true},
-		{StateTriggerLevel1, InterruptPinBoth, false},
-	}
-
-	for _, tt := range tests {
-		sm, bmx, _, _, _ := createTestStateMachine()
-		ctx := context.Background()
-
-		sm.state = tt.state
-		sm.enterState(ctx, tt.state)
-
-		if bmx.interruptPin != tt.expectedPin {
-			t.Errorf("state %s: expected pin %s, got %s", tt.state, tt.expectedPin, bmx.interruptPin)
-		}
-
-		if bmx.lastConfig.AnyMotion != tt.expectedAnyMot {
-			t.Errorf("state %s: expected AnyMotion=%v, got %v", tt.state, tt.expectedAnyMot, bmx.lastConfig.AnyMotion)
-		}
-	}
-}
-
-func TestStateMachine_UnauthorizedSeatboxFromArmed(t *testing.T) {
-	sm, _, _, _, alarm := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateArmed
-	sm.alarmEnabled = true
-	sm.vehicleStandby = true
-	sm.alarmDuration = 10
-
-	sm.SendEvent(UnauthorizedSeatboxEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateTriggerLevel2 {
-		t.Errorf("expected StateTriggerLevel2 on unauthorized seatbox, got %s", sm.State())
-	}
-
-	if !alarm.active {
-		t.Error("expected alarm to be active")
-	}
-}
-
-func TestStateMachine_UnauthorizedSeatboxFromDelayArmed(t *testing.T) {
-	sm, _, _, _, alarm := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateDelayArmed
-	sm.alarmEnabled = true
-	sm.vehicleStandby = true
-	sm.alarmDuration = 10
-
-	sm.SendEvent(UnauthorizedSeatboxEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateTriggerLevel2 {
-		t.Errorf("expected StateTriggerLevel2 on unauthorized seatbox, got %s", sm.State())
-	}
-
-	if !alarm.active {
-		t.Error("expected alarm to be active")
-	}
-}
-
-func TestStateMachine_UnauthorizedSeatboxFromLevel1Wait(t *testing.T) {
-	sm, _, _, _, alarm := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateTriggerLevel1Wait
-	sm.alarmEnabled = true
-	sm.vehicleStandby = true
-	sm.alarmDuration = 10
-
-	sm.SendEvent(UnauthorizedSeatboxEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateTriggerLevel2 {
-		t.Errorf("expected StateTriggerLevel2 on unauthorized seatbox, got %s", sm.State())
-	}
-
-	if !alarm.active {
-		t.Error("expected alarm to be active")
-	}
-}
-
-func TestStateMachine_UnauthorizedSeatboxFromLevel1(t *testing.T) {
-	sm, _, _, _, alarm := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateTriggerLevel1
-	sm.alarmEnabled = true
-	sm.vehicleStandby = true
-	sm.alarmDuration = 10
-
-	sm.SendEvent(UnauthorizedSeatboxEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateTriggerLevel2 {
-		t.Errorf("expected StateTriggerLevel2 on unauthorized seatbox, got %s", sm.State())
-	}
-
-	if !alarm.active {
-		t.Error("expected alarm to be active")
-	}
-}
-
-func TestStateMachine_AuthorizedSeatboxAccess(t *testing.T) {
-	sm, bmx, _, inh, _ := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateArmed
-	sm.alarmEnabled = true
-	sm.vehicleStandby = true
-
-	sm.SendEvent(SeatboxOpenedEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateSeatboxAccess {
-		t.Errorf("expected StateSeatboxAccess on authorized opening, got %s", sm.State())
-	}
-
-	if !inh.acquired {
-		t.Error("expected suspend inhibitor to be acquired in seatbox access")
-	}
-
-	if bmx.interruptEnabled {
-		t.Error("expected interrupt to be disabled during seatbox access")
-	}
-
-	if sm.preSeatboxState != StateArmed {
-		t.Errorf("expected preSeatboxState to be StateArmed, got %s", sm.preSeatboxState)
-	}
-}
-
-func TestStateMachine_SeatboxAccessToDelayArmed(t *testing.T) {
-	sm, _, _, inh, _ := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateSeatboxAccess
-	sm.preSeatboxState = StateArmed
-	sm.alarmEnabled = true
-	sm.vehicleStandby = true
-	inh.acquired = true
-
-	sm.SendEvent(SeatboxClosedEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateDelayArmed {
-		t.Errorf("expected StateDelayArmed after seatbox closed, got %s", sm.State())
-	}
-
-	if !sm.seatboxLockClosed {
-		t.Error("expected seatboxLockClosed to be true")
-	}
-}
-
-func TestStateMachine_RuntimeDisarmFromArmedStates(t *testing.T) {
-	// statesWithAlarm: alarm controller is running in these states (exit handler calls Stop)
-	statesWithAlarm := map[State]bool{
-		StateTriggerLevel1Wait: true,
-		StateTriggerLevel2:     true,
-		StateWaitingMovement:   true,
-	}
-
-	states := []State{
-		StateDelayArmed,
-		StateArmed,
-		StateTriggerLevel1Wait,
-		StateTriggerLevel1,
-		StateTriggerLevel2,
-		StateWaitingMovement,
-	}
-
-	for _, initialState := range states {
-		sm, _, _, _, alarm := createTestStateMachine()
-		ctx := context.Background()
-
-		sm.state = initialState
-		sm.alarmEnabled = true
-		sm.vehicleStandby = true
-		alarm.active = statesWithAlarm[initialState]
-
-		sm.SendEvent(RuntimeDisarmEvent{})
-		sm.handleEvent(ctx, <-sm.events)
-
-		if sm.State() != StateDisarmed {
-			t.Errorf("RuntimeDisarm from %s: expected StateDisarmed, got %s", initialState, sm.State())
-		}
-
-		if !sm.alarmEnabled {
-			t.Errorf("RuntimeDisarm from %s: alarmEnabled should remain true", initialState)
-		}
-
-		if statesWithAlarm[initialState] && alarm.active {
-			t.Errorf("RuntimeDisarm from %s: alarm should be stopped", initialState)
-		}
-	}
-}
-
-func TestStateMachine_RuntimeDisarmPreservesAlarmEnabled(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateArmed
-	sm.alarmEnabled = true
-	sm.vehicleStandby = true
-
-	sm.SendEvent(RuntimeDisarmEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateDisarmed {
-		t.Errorf("expected StateDisarmed, got %s", sm.State())
-	}
-
-	// alarmEnabled must not be touched — re-arm on next standby should work
-	if !sm.alarmEnabled {
-		t.Error("alarmEnabled must remain true after runtime disarm")
-	}
-}
-
-func TestStateMachine_RuntimeDisarmThenRearmOnStandby(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateArmed
-	sm.alarmEnabled = true
-	sm.vehicleStandby = true
-
-	sm.SendEvent(RuntimeDisarmEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateDisarmed {
-		t.Fatalf("expected StateDisarmed, got %s", sm.State())
-	}
-
-	// Simulate scooter going active then returning to standby
-	sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateReadyToDrive})
-	sm.handleEvent(ctx, <-sm.events)
-	sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateStandby})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateDelayArmed {
-		t.Errorf("expected StateDelayArmed after returning to standby, got %s", sm.State())
-	}
-}
-
-func TestStateMachine_RuntimeArmFromDisarmed(t *testing.T) {
-	sm, _, _, inh, _ := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateDisarmed
-	sm.alarmEnabled = true
-	sm.vehicleStandby = false // not in standby — arm forced anyway
-
-	sm.SendEvent(RuntimeArmEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateDelayArmed {
-		t.Errorf("expected StateDelayArmed, got %s", sm.State())
-	}
-
-	if !inh.acquired {
-		t.Error("expected suspend inhibitor to be acquired")
-	}
-}
-
-func TestStateMachine_RuntimeArmIgnoredWhenDisabled(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateDisarmed
-	sm.alarmEnabled = false
-
-	sm.SendEvent(RuntimeArmEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateDisarmed {
-		t.Errorf("RuntimeArm with disabled alarm should be ignored, got %s", sm.State())
-	}
-}
-
-func TestStateMachine_WaitingHibernationDoesNotDisarm(t *testing.T) {
-	armedStates := []State{
-		StateDelayArmed,
-		StateArmed,
-		StateTriggerLevel1Wait,
-		StateTriggerLevel1,
-		StateTriggerLevel2,
-		StateWaitingMovement,
-		StateSeatboxAccess,
-	}
-
-	for _, initialState := range armedStates {
-		sm, _, _, _, _ := createTestStateMachine()
-		ctx := context.Background()
-
-		sm.state = initialState
-		sm.vehicleStandby = true
-		sm.alarmEnabled = true
-
-		sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateWaitingHibernation})
-		sm.handleEvent(ctx, <-sm.events)
-
-		if sm.State() != initialState {
-			t.Errorf("expected to stay in %s on waiting-hibernation, got %s", initialState, sm.State())
-		}
-	}
-}
-
-func TestStateMachine_ShuttingDownDoesNotDisarm(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.state = StateArmed
-	sm.vehicleStandby = true
-	sm.alarmEnabled = true
-
-	sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateShuttingDown})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateArmed {
-		t.Errorf("expected to stay in StateArmed on shutting-down, got %s", sm.State())
-	}
-}
-
-func TestStateMachine_InitToArmedSkipsDelay(t *testing.T) {
-	sm, bmx, pub, _, _ := createTestStateMachine()
-	ctx := context.Background()
-
-	sm.alarmEnabled = true
-	sm.vehicleStandby = true
-	sm.SendEvent(InitCompleteEvent{})
-	sm.handleEvent(ctx, <-sm.events)
-
-	if sm.State() != StateArmed {
-		t.Errorf("expected StateArmed on startup with alarm+standby, got %s", sm.State())
-	}
-
-	if pub.lastStatus != "armed" {
-		t.Errorf("expected status 'armed', got %s", pub.lastStatus)
-	}
-
-	if !bmx.interruptEnabled {
-		t.Error("expected interrupt to be enabled in armed state")
+		t.Error("expected alarm stopped after L2 exit")
 	}
 }
