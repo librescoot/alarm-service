@@ -355,22 +355,22 @@ func TestStateMachine_Level2ToDisarmedAfterMaxCycles(t *testing.T) {
 	}
 }
 
-func TestStateMachine_WaitingMovementCycleIncrement(t *testing.T) {
+func TestStateMachine_WaitingMovementRetriggersLevel2(t *testing.T) {
 	sm, _, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
 
 	sm.state = StateWaitingMovement
 	sm.level2Cycles = 1
 
-	sm.SendEvent(MajorMovementEvent{})
+	sm.SendEvent(BMXInterruptEvent{})
 	sm.handleEvent(ctx, <-sm.events)
 
 	if sm.level2Cycles != 2 {
 		t.Errorf("expected level2Cycles to be 2, got %d", sm.level2Cycles)
 	}
 
-	if sm.State() != StateWaitingMovement {
-		t.Errorf("expected to stay in StateWaitingMovement, got %s", sm.State())
+	if sm.State() != StateTriggerLevel2 {
+		t.Errorf("expected StateTriggerLevel2, got %s", sm.State())
 	}
 }
 
@@ -381,7 +381,7 @@ func TestStateMachine_WaitingMovementToDisarmedAfterMaxCycles(t *testing.T) {
 	sm.state = StateWaitingMovement
 	sm.level2Cycles = 3
 
-	sm.SendEvent(MajorMovementEvent{})
+	sm.SendEvent(BMXInterruptEvent{})
 	sm.handleEvent(ctx, <-sm.events)
 
 	if sm.State() != StateDisarmed {

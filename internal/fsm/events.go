@@ -67,11 +67,6 @@ type BMXInterruptEvent struct {
 
 func (e BMXInterruptEvent) Type() string { return "bmx_interrupt" }
 
-// TemporarilyDisarmEvent signals temporary disarm request
-type TemporarilyDisarmEvent struct{}
-
-func (e TemporarilyDisarmEvent) Type() string { return "temporarily_disarm" }
-
 // RuntimeArmEvent forces the FSM to arm without changing alarm.enabled
 type RuntimeArmEvent struct{}
 
@@ -101,26 +96,6 @@ func (e Level1CheckTimerEvent) Type() string { return "level1_check_timer" }
 type Level2CheckTimerEvent struct{}
 
 func (e Level2CheckTimerEvent) Type() string { return "level2_check_timer" }
-
-// ChipSetupTimerEvent signals time to setup chip for level 2
-type ChipSetupTimerEvent struct{}
-
-func (e ChipSetupTimerEvent) Type() string { return "chip_setup_timer" }
-
-// MinorMovementEvent signals minor movement detected
-type MinorMovementEvent struct{}
-
-func (e MinorMovementEvent) Type() string { return "minor_movement" }
-
-// MajorMovementEvent signals major movement detected
-type MajorMovementEvent struct{}
-
-func (e MajorMovementEvent) Type() string { return "major_movement" }
-
-// NoMovementEvent signals no movement detected
-type NoMovementEvent struct{}
-
-func (e NoMovementEvent) Type() string { return "no_movement" }
 
 // ManualTriggerEvent signals manual alarm trigger
 type ManualTriggerEvent struct {

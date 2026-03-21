@@ -89,9 +89,6 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(UnauthorizedSeatboxEvent); ok {
 			return StateTriggerLevel2
 		}
-		if _, ok := event.(MinorMovementEvent); ok {
-			return StateTriggerLevel1Wait
-		}
 		if _, ok := event.(BMXInterruptEvent); ok {
 			return StateTriggerLevel1Wait
 		}
@@ -144,9 +141,6 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(Level1CheckTimerEvent); ok {
 			return StateDelayArmed
 		}
-		if _, ok := event.(MajorMovementEvent); ok {
-			return StateTriggerLevel2
-		}
 		if _, ok := event.(BMXInterruptEvent); ok {
 			return StateTriggerLevel2
 		}
@@ -185,12 +179,12 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(Level2CheckTimerEvent); ok {
 			return StateDelayArmed
 		}
-		if _, ok := event.(MajorMovementEvent); ok {
+		if _, ok := event.(BMXInterruptEvent); ok {
 			sm.level2Cycles++
 			if sm.level2Cycles >= 4 {
 				return StateDisarmed
 			}
-			return StateWaitingMovement
+			return StateTriggerLevel2
 		}
 		if e, ok := event.(VehicleStateChangedEvent); ok && shouldDisarmForVehicleState(e.State) {
 			sm.vehicleStandby = false
@@ -216,6 +210,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if e, ok := event.(AlarmModeChangedEvent); ok && !e.Enabled {
 			sm.alarmEnabled = false
 			return StateWaitingEnabled
+		}
+		if _, ok := event.(RuntimeDisarmEvent); ok {
+			return StateDisarmed
 		}
 	}
 
