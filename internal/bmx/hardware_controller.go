@@ -178,6 +178,16 @@ func (c *HardwareController) EnableInterrupt(ctx context.Context) error {
 		c.log.Warn("failed to clear latched interrupt before enabling poller", "error", err)
 	}
 
+	// Wait for the low-pass filter to settle after bandwidth change, then clear
+	// again. The first samples after reconfiguration can produce a transient slope
+	// that triggers a false interrupt. One sample period is sufficient (32ms at
+	// 31.25 Hz, 64ms at 15.63 Hz); 100ms covers all bandwidths with margin.
+	time.Sleep(100 * time.Millisecond)
+
+	if err := c.accel.ClearLatchedInterrupt(); err != nil {
+		c.log.Warn("failed to clear latched interrupt after settle", "error", err)
+	}
+
 	c.poller.Enable()
 	return nil
 }
