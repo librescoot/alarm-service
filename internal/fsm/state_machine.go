@@ -278,6 +278,17 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 		return
 	}
 
+	if _, ok := event.(HibernateAfterWakeTimerEvent); ok {
+		if sm.state == StateArmed && sm.wakeFromHibernation && sm.vehicleStandby {
+			sm.wakeFromHibernation = false
+			sm.log.Info("hibernate cooldown elapsed, requesting re-hibernate")
+			if err := sm.powerCommander.RequestHibernate(); err != nil {
+				sm.log.Error("failed to request hibernation", "error", err)
+			}
+		}
+		return
+	}
+
 	oldState := sm.state
 	sm.log.Debug("handling event",
 		"event", event.Type(),

@@ -86,15 +86,19 @@ func (sm *StateMachine) onEnterArmed(ctx context.Context) {
 		sm.log.Error("failed to enable interrupt", "error", err)
 	}
 
-	// If we were woken from hibernation by the nRF52 and the vehicle is still in
-	// stand-by (nobody unlocked), re-hibernate now that the alarm has resolved.
+	// If we were woken from hibernation and vehicle is still in stand-by, start a
+	// cooldown timer. After 5 minutes with no further triggers, re-hibernate.
 	if sm.wakeFromHibernation && sm.vehicleStandby {
-		sm.wakeFromHibernation = false
-		sm.log.Info("alarm resolved after hibernation wake, requesting re-hibernate")
-		if err := sm.powerCommander.RequestHibernate(); err != nil {
-			sm.log.Error("failed to request hibernation", "error", err)
-		}
+		sm.log.Info("armed after hibernation wake, starting re-hibernate cooldown", "duration", "5m")
+		sm.startTimer("hibernate_cooldown", 5*time.Minute, func() {
+			sm.SendEvent(HibernateAfterWakeTimerEvent{})
+		})
 	}
+}
+
+// onExitArmed handles exit from armed state
+func (sm *StateMachine) onExitArmed(_ context.Context) {
+	sm.stopTimer("hibernate_cooldown")
 }
 
 // onEnterTriggerLevel1Wait handles entry to trigger_level_1_wait state

@@ -97,6 +97,11 @@ type Level2CheckTimerEvent struct{}
 
 func (e Level2CheckTimerEvent) Type() string { return "level2_check_timer" }
 
+// HibernateAfterWakeTimerEvent signals the post-hibernation-wake cooldown has elapsed
+type HibernateAfterWakeTimerEvent struct{}
+
+func (e HibernateAfterWakeTimerEvent) Type() string { return "hibernate_after_wake_timer" }
+
 // ManualTriggerEvent signals manual alarm trigger
 type ManualTriggerEvent struct {
 	Duration int
