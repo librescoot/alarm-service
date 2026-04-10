@@ -110,6 +110,7 @@ func (a *App) Run(ctx context.Context) error {
 		a.publisher,
 		a.inhibitor,
 		a.alarmController,
+		a.publisher,
 		a.cfg.AlarmDuration,
 		a.log,
 	)

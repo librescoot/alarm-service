@@ -93,23 +93,25 @@ type StateMachine struct {
 	log    *slog.Logger
 	ctx    context.Context
 
-	bmxClient       BMXClient
-	publisher       StatusPublisher
-	inhibitor       SuspendInhibitor
-	alarmController AlarmController
+	bmxClient        BMXClient
+	publisher        StatusPublisher
+	inhibitor        SuspendInhibitor
+	alarmController  AlarmController
+	powerCommander   PowerCommander
 
-	timers              map[string]*time.Timer
-	alarmEnabled        bool
-	vehicleStandby      bool
-	level2Cycles        int
-	requestDisarm       bool
-	alarmDuration       int
-	hairTriggerEnabled  bool
-	hairTriggerDuration int
-	l1CooldownDuration  int
-	preSeatboxState     State
-	seatboxLockClosed   bool
-	initWakeL1          bool // L1 triggered from stale BMX latch during startup
+	timers               map[string]*time.Timer
+	alarmEnabled         bool
+	vehicleStandby       bool
+	level2Cycles         int
+	requestDisarm        bool
+	alarmDuration        int
+	hairTriggerEnabled   bool
+	hairTriggerDuration  int
+	l1CooldownDuration   int
+	preSeatboxState      State
+	seatboxLockClosed    bool
+	initWakeL1           bool // L1 triggered from stale BMX latch during startup
+	wakeFromHibernation  bool // woken from hibernation by nRF52 accelerometer
 }
 
 // SensorConfig mirrors hwbmx.SensorConfig at the FSM layer to avoid an import cycle.
@@ -156,6 +158,11 @@ type SuspendInhibitor interface {
 	Release() error
 }
 
+// PowerCommander interface for sending power state commands
+type PowerCommander interface {
+	RequestHibernate() error
+}
+
 // AlarmController interface for horn and hazard lights
 type AlarmController interface {
 	Start(duration time.Duration) error
@@ -170,6 +177,7 @@ func New(
 	pub StatusPublisher,
 	inh SuspendInhibitor,
 	alarm AlarmController,
+	power PowerCommander,
 	alarmDuration int,
 	log *slog.Logger,
 ) *StateMachine {
@@ -181,6 +189,7 @@ func New(
 		publisher:           pub,
 		inhibitor:           inh,
 		alarmController:     alarm,
+		powerCommander:      power,
 		timers:              make(map[string]*time.Timer),
 		alarmEnabled:        false,
 		vehicleStandby:      false,

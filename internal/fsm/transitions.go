@@ -23,6 +23,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if e, ok := event.(AlarmModeChangedEvent); ok {
 			sm.alarmEnabled = e.Enabled
 		}
+		if be, ok := event.(BMXInterruptEvent); ok && be.Data == "wake-hibernation" {
+			sm.wakeFromHibernation = true
+		}
 		if _, ok := event.(InitCompleteEvent); ok {
 			if sm.alarmEnabled {
 				if sm.vehicleStandby {
@@ -89,7 +92,10 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(UnauthorizedSeatboxEvent); ok {
 			return StateTriggerLevel2
 		}
-		if _, ok := event.(BMXInterruptEvent); ok {
+		if be, ok := event.(BMXInterruptEvent); ok {
+			if be.Data == "wake-hibernation" {
+				sm.wakeFromHibernation = true
+			}
 			return StateTriggerLevel1Wait
 		}
 		if e, ok := event.(VehicleStateChangedEvent); ok && shouldDisarmForVehicleState(e.State) {

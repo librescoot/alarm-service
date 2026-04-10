@@ -35,3 +35,11 @@ func (p *Publisher) PublishInterrupt(payload string) error {
 	}
 	return nil
 }
+
+// RequestHibernate sends a hibernate-manual command to pm-service
+func (p *Publisher) RequestHibernate() error {
+	if _, err := p.ipc.LPush("scooter:power", "hibernate-manual"); err != nil {
+		return fmt.Errorf("failed to send hibernate command: %w", err)
+	}
+	return nil
+}

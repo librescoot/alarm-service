@@ -99,16 +99,26 @@ func (m *mockAlarmController) BlinkHazards() error {
 	return nil
 }
 
+type mockPowerCommander struct {
+	hibernateCalled int
+}
+
+func (m *mockPowerCommander) RequestHibernate() error {
+	m.hibernateCalled++
+	return nil
+}
+
 func createTestStateMachine() (*StateMachine, *mockBMXClient, *mockStatusPublisher, *mockSuspendInhibitor, *mockAlarmController) {
 	bmx := &mockBMXClient{}
 	pub := &mockStatusPublisher{}
 	inh := &mockSuspendInhibitor{}
 	alarm := &mockAlarmController{}
+	power := &mockPowerCommander{}
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelError,
 	}))
 
-	sm := New(bmx, pub, inh, alarm, 10, log)
+	sm := New(bmx, pub, inh, alarm, power, 10, log)
 	return sm, bmx, pub, inh, alarm
 }
 

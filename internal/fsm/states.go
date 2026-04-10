@@ -26,6 +26,7 @@ func (sm *StateMachine) onEnterWaitingEnabled(ctx context.Context) {
 	sm.configureBMX(ctx, InterruptPinINT2, sensorIdle)
 	sm.inhibitor.Release()
 	sm.level2Cycles = 0
+	sm.wakeFromHibernation = false
 }
 
 // onEnterDisarmed handles entry to disarmed state
@@ -43,6 +44,7 @@ func (sm *StateMachine) onEnterDisarmed(ctx context.Context) {
 	sm.configureBMX(ctx, InterruptPinNone, sensorIdle)
 	sm.inhibitor.Release()
 	sm.level2Cycles = 0
+	sm.wakeFromHibernation = false
 }
 
 // onEnterDelayArmed handles entry to delay_armed state
@@ -84,6 +86,15 @@ func (sm *StateMachine) onEnterArmed(ctx context.Context) {
 		sm.log.Error("failed to enable interrupt", "error", err)
 	}
 
+	// If we were woken from hibernation by the nRF52 and the vehicle is still in
+	// stand-by (nobody unlocked), re-hibernate now that the alarm has resolved.
+	if sm.wakeFromHibernation && sm.vehicleStandby {
+		sm.wakeFromHibernation = false
+		sm.log.Info("alarm resolved after hibernation wake, requesting re-hibernate")
+		if err := sm.powerCommander.RequestHibernate(); err != nil {
+			sm.log.Error("failed to request hibernation", "error", err)
+		}
+	}
 }
 
 // onEnterTriggerLevel1Wait handles entry to trigger_level_1_wait state
