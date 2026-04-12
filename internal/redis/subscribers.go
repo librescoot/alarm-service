@@ -11,13 +11,14 @@ import (
 
 // Subscriber handles subscribing to Redis channels using HashWatcher
 type Subscriber struct {
-	vehicleWatcher        *ipc.HashWatcher
-	settingsWatcher       *ipc.HashWatcher
-	bmxWatcher            *ipc.Subscription[string]
-	ipc                   *ipc.Client
-	log                   *slog.Logger
-	sm                    *fsm.StateMachine
-	seatboxTriggerEnabled bool
+	vehicleWatcher          *ipc.HashWatcher
+	settingsWatcher         *ipc.HashWatcher
+	bmxWatcher              *ipc.Subscription[string]
+	ipc                     *ipc.Client
+	log                     *slog.Logger
+	sm                      *fsm.StateMachine
+	seatboxTriggerEnabled   bool
+	authorizedSeatboxPending bool
 }
 
 // NewSubscriber creates a new Subscriber with HashWatcher instances
@@ -48,6 +49,7 @@ func (s *Subscriber) setupVehicleWatcher() {
 
 	s.vehicleWatcher.OnEvent("seatbox:opened", func() error {
 		s.log.Info("authorized seatbox opening detected")
+		s.authorizedSeatboxPending = true
 		s.sm.SendEvent(fsm.SeatboxOpenedEvent{})
 		return nil
 	})
@@ -55,8 +57,13 @@ func (s *Subscriber) setupVehicleWatcher() {
 	s.vehicleWatcher.OnField("seatbox:lock", func(lockState string) error {
 		s.log.Debug("seatbox lock state changed", "state", lockState)
 		if lockState == "closed" {
+			s.authorizedSeatboxPending = false
 			s.sm.SendEvent(fsm.SeatboxClosedEvent{})
 		} else if lockState == "open" {
+			if s.authorizedSeatboxPending {
+				// seatbox:opened event was already received for this opening cycle; skip
+				return nil
+			}
 			currentState := s.sm.State()
 			if currentState == fsm.StateSeatboxAccess {
 				return nil
