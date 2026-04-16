@@ -35,22 +35,25 @@ type Config struct {
 	HairTriggerDurationFlagSet bool
 	L1Cooldown                 int
 	L1CooldownFlagSet          bool
+	IntGPIOChip                string
+	IntGPIOLine                int
 }
 
 // App represents the alarm-service application
 type App struct {
-	cfg             *Config
-	log             *slog.Logger
-	redis           *redis.Client
-	publisher       *redis.Publisher
-	accel           *hwbmx.Accelerometer
-	gyro            *hwbmx.Gyroscope
-	bmxController   *bmx.HardwareController
-	interruptPoller *hardware.InterruptPoller
-	alarmController *alarm.Controller
-	inhibitor       *pm.Inhibitor
-	stateMachine    *fsm.StateMachine
-	subscriber      *redis.Subscriber
+	cfg              *Config
+	log              *slog.Logger
+	redis            *redis.Client
+	publisher        *redis.Publisher
+	accel            *hwbmx.Accelerometer
+	gyro             *hwbmx.Gyroscope
+	bmxController    *bmx.HardwareController
+	interruptPoller  *hardware.InterruptPoller
+	interruptWatcher *hardware.InterruptWatcher
+	alarmController  *alarm.Controller
+	inhibitor        *pm.Inhibitor
+	stateMachine     *fsm.StateMachine
+	subscriber       *redis.Subscriber
 }
 
 // New creates a new App
@@ -90,6 +93,17 @@ func (a *App) Run(ctx context.Context) error {
 
 	a.interruptPoller = hardware.NewInterruptPoller(a.accel, a.gyro, a.publisher, a.log)
 	go a.interruptPoller.Run(ctx)
+
+	if a.cfg.IntGPIOChip != "" {
+		a.interruptWatcher = hardware.NewInterruptWatcher(a.cfg.IntGPIOChip, a.cfg.IntGPIOLine, a.log)
+		if err := a.interruptWatcher.Open(); err != nil {
+			a.log.Warn("interrupt watcher disabled (GPIO unavailable)", "error", err)
+			a.interruptWatcher = nil
+		} else {
+			a.interruptWatcher.Enable()
+			go a.interruptWatcher.Run(ctx)
+		}
+	}
 
 	a.bmxController = bmx.NewHardwareController(a.accel, a.gyro, a.interruptPoller, a.log)
 

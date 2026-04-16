@@ -25,6 +25,8 @@ func main() {
 	hairTrigger := flag.Bool("hair-trigger", false, "Enable hair trigger mode (immediate short alarm on first motion)")
 	hairTriggerDuration := flag.Int("hair-trigger-duration", 3, "Hair trigger alarm duration in seconds")
 	l1Cooldown := flag.Int("l1-cooldown", 5, "Level 1 cooldown duration in seconds")
+	intGPIOChip := flag.String("int-gpio-chip", "gpiochip2", "GPIO chip name for BMX055 INT1 edge watcher (empty to disable)")
+	intGPIOLine := flag.Int("int-gpio-line", 22, "GPIO line offset for BMX055 INT1 edge watcher")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
@@ -100,6 +102,8 @@ func main() {
 		HairTriggerDurationFlagSet: hairTriggerDurationFlagSet,
 		L1Cooldown:                 *l1Cooldown,
 		L1CooldownFlagSet:          l1CooldownFlagSet,
+		IntGPIOChip:                *intGPIOChip,
+		IntGPIOLine:                *intGPIOLine,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
