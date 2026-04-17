@@ -158,11 +158,31 @@ func (c *HardwareController) SoftReset(ctx context.Context) error {
 	return nil
 }
 
-// EnableInterrupt maps interrupt pins and enables the poller for the current mode.
-// Must be called after ConfigureSensor. Clears any stale latched interrupt first
-// to avoid false triggers from filter-settling transients during configuration.
+// EnableInterrupt enables the poller for the current mode and maps the motion
+// engine to the INT pins. Must be called after ConfigureSensor.
+//
+// Ordering matters: the bandwidth change in ConfigureSensor kicks off a
+// low-pass filter settle that can produce a transient slope large enough to
+// set the status bit. If the pin mapping is in place while that transient
+// latches, the INT line spikes from a stale status bit and the gpio-keys
+// edge already fires before the status is cleared — which both gives a false
+// wake and hides the real first bump from the poller (since it has not been
+// enabled yet). Clear twice across a filter-settle delay *before* adding the
+// engine to the pin map, so the first sample the map sees reflects reality.
+// One sample period is 32 ms at 31.25 Hz and 64 ms at 15.63 Hz; 100 ms covers
+// all bandwidths in use with margin.
 func (c *HardwareController) EnableInterrupt(ctx context.Context) error {
 	c.log.Info("enabling interrupt", "mode", c.currentMode.String())
+
+	if err := c.accel.ClearLatchedInterrupt(); err != nil {
+		c.log.Warn("failed to clear latched interrupt before settle", "error", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	if err := c.accel.ClearLatchedInterrupt(); err != nil {
+		c.log.Warn("failed to clear latched interrupt after settle", "error", err)
+	}
 
 	if c.currentMode == hwbmx.InterruptModeAnyMotion {
 		if err := c.accel.MapAnyMotionToPins(hwbmx.InterruptPinBoth); err != nil {
@@ -172,20 +192,6 @@ func (c *HardwareController) EnableInterrupt(ctx context.Context) error {
 		if err := c.accel.EnableSlowNoMotionInterrupt(true); err != nil {
 			return fmt.Errorf("failed to enable slow-motion interrupt: %w", err)
 		}
-	}
-
-	if err := c.accel.ClearLatchedInterrupt(); err != nil {
-		c.log.Warn("failed to clear latched interrupt before enabling poller", "error", err)
-	}
-
-	// Wait for the low-pass filter to settle after bandwidth change, then clear
-	// again. The first samples after reconfiguration can produce a transient slope
-	// that triggers a false interrupt. One sample period is sufficient (32ms at
-	// 31.25 Hz, 64ms at 15.63 Hz); 100ms covers all bandwidths with margin.
-	time.Sleep(100 * time.Millisecond)
-
-	if err := c.accel.ClearLatchedInterrupt(); err != nil {
-		c.log.Warn("failed to clear latched interrupt after settle", "error", err)
 	}
 
 	c.poller.Enable()
