@@ -35,22 +35,26 @@ type Config struct {
 	HairTriggerDurationFlagSet bool
 	L1Cooldown                 int
 	L1CooldownFlagSet          bool
+	EvdevDevice                string
+	EvdevKeycode               int
+	PollerIntervalMs           int
 }
 
 // App represents the alarm-service application
 type App struct {
-	cfg             *Config
-	log             *slog.Logger
-	redis           *redis.Client
-	publisher       *redis.Publisher
-	accel           *hwbmx.Accelerometer
-	gyro            *hwbmx.Gyroscope
-	bmxController   *bmx.HardwareController
-	interruptPoller *hardware.InterruptPoller
-	alarmController *alarm.Controller
-	inhibitor       *pm.Inhibitor
-	stateMachine    *fsm.StateMachine
-	subscriber      *redis.Subscriber
+	cfg              *Config
+	log              *slog.Logger
+	redis            *redis.Client
+	publisher        *redis.Publisher
+	accel            *hwbmx.Accelerometer
+	gyro             *hwbmx.Gyroscope
+	bmxController    *bmx.HardwareController
+	interruptPoller  *hardware.InterruptPoller
+	interruptWatcher *hardware.InterruptWatcher
+	alarmController  *alarm.Controller
+	inhibitor        *pm.Inhibitor
+	stateMachine     *fsm.StateMachine
+	subscriber       *redis.Subscriber
 }
 
 // New creates a new App
@@ -88,10 +92,31 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	defer a.closeBMXHardware()
 
-	a.interruptPoller = hardware.NewInterruptPoller(a.accel, a.gyro, a.publisher, a.log)
+	a.interruptPoller = hardware.NewInterruptPoller(a.accel, a.gyro, a.publisher, time.Duration(a.cfg.PollerIntervalMs)*time.Millisecond, a.log)
 	go a.interruptPoller.Run(ctx)
 
-	a.bmxController = bmx.NewHardwareController(a.accel, a.gyro, a.interruptPoller, a.log)
+	var watcherSource interface {
+		Enable()
+		Disable()
+	}
+	if a.cfg.EvdevDevice != "" {
+		a.interruptWatcher = hardware.NewInterruptWatcher(
+			a.cfg.EvdevDevice,
+			uint16(a.cfg.EvdevKeycode),
+			a.accel,
+			a.publisher,
+			a.log,
+		)
+		if err := a.interruptWatcher.Open(); err != nil {
+			a.log.Warn("evdev interrupt watcher disabled (falling back to poller only)", "error", err)
+			a.interruptWatcher = nil
+		} else {
+			watcherSource = a.interruptWatcher
+			go a.interruptWatcher.Run(ctx)
+		}
+	}
+
+	a.bmxController = bmx.NewHardwareController(a.accel, a.gyro, a.interruptPoller, watcherSource, a.log)
 
 	a.alarmController, err = alarm.NewController(a.cfg.RedisAddr, a.cfg.HornEnabled, a.log)
 	if err != nil {

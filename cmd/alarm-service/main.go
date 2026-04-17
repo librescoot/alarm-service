@@ -25,6 +25,9 @@ func main() {
 	hairTrigger := flag.Bool("hair-trigger", false, "Enable hair trigger mode (immediate short alarm on first motion)")
 	hairTriggerDuration := flag.Int("hair-trigger-duration", 3, "Hair trigger alarm duration in seconds")
 	l1Cooldown := flag.Int("l1-cooldown", 5, "Level 1 cooldown duration in seconds")
+	evdevDevice := flag.String("evdev-device", "/dev/input/by-path/platform-gpio-keys-event", "Input device for the BMX055 INT1 gpio-keys edge (empty to disable and use poller only)")
+	evdevKeycode := flag.Int("evdev-keycode", 0x2b, "Keycode from gpio-keys device that corresponds to BMX055 INT1")
+	pollerIntervalMs := flag.Int("poller-interval-ms", 1000, "Interval in ms between I2C status polls. Used as a watchdog when the evdev path is active; primary source when evdev is disabled")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
@@ -80,7 +83,10 @@ func main() {
 		"seatbox_trigger", *seatboxTrigger,
 		"hair_trigger", *hairTrigger,
 		"hair_trigger_duration", *hairTriggerDuration,
-		"l1_cooldown", *l1Cooldown)
+		"l1_cooldown", *l1Cooldown,
+		"evdev_device", *evdevDevice,
+		"evdev_keycode", *evdevKeycode,
+		"poller_interval_ms", *pollerIntervalMs)
 
 	application := app.New(&app.Config{
 		I2CBus:                     *i2cBus,
@@ -100,6 +106,9 @@ func main() {
 		HairTriggerDurationFlagSet: hairTriggerDurationFlagSet,
 		L1Cooldown:                 *l1Cooldown,
 		L1CooldownFlagSet:          l1CooldownFlagSet,
+		EvdevDevice:                *evdevDevice,
+		EvdevKeycode:               *evdevKeycode,
+		PollerIntervalMs:           *pollerIntervalMs,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

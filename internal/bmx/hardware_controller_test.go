@@ -146,7 +146,7 @@ func TestHardwareController_EnableInterrupt(t *testing.T) {
 	poller := &mockInterruptPoller{}
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	controller := NewHardwareController(accel, gyro, poller, log)
+	controller := NewHardwareController(accel, gyro, poller, nil, log)
 	ctx := context.Background()
 
 	// Use slow-motion mode so EnableSlowNoMotionInterrupt is called.
@@ -175,7 +175,7 @@ func TestHardwareController_DisableInterrupt(t *testing.T) {
 	poller := &mockInterruptPoller{enabled: true}
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	controller := NewHardwareController(accel, gyro, poller, log)
+	controller := NewHardwareController(accel, gyro, poller, nil, log)
 
 	ctx := context.Background()
 	if err := controller.DisableInterrupt(ctx); err != nil {
@@ -201,7 +201,7 @@ func TestHardwareController_EnableDisableCycle(t *testing.T) {
 	poller := &mockInterruptPoller{}
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	controller := NewHardwareController(accel, gyro, poller, log)
+	controller := NewHardwareController(accel, gyro, poller, nil, log)
 	ctx := context.Background()
 
 	// Use slow-motion mode so EnableSlowNoMotionInterrupt is called.
@@ -249,7 +249,7 @@ func TestHardwareController_SoftReset(t *testing.T) {
 	poller := &mockInterruptPoller{}
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	controller := NewHardwareController(accel, gyro, poller, log)
+	controller := NewHardwareController(accel, gyro, poller, nil, log)
 
 	ctx := context.Background()
 	if err := controller.SoftReset(ctx); err != nil {
@@ -286,7 +286,7 @@ func TestHardwareController_EnableInterruptError(t *testing.T) {
 	poller := &mockInterruptPoller{}
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	controller := NewHardwareController(accel, gyro, poller, log)
+	controller := NewHardwareController(accel, gyro, poller, nil, log)
 	ctx := context.Background()
 
 	// Use slow-motion mode so EnableSlowNoMotionInterrupt is called (and returns the error).
@@ -311,7 +311,7 @@ func TestHardwareController_DisableInterruptError(t *testing.T) {
 	poller := &mockInterruptPoller{enabled: true}
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	controller := NewHardwareController(accel, gyro, poller, log)
+	controller := NewHardwareController(accel, gyro, poller, nil, log)
 
 	ctx := context.Background()
 	err := controller.DisableInterrupt(ctx)
