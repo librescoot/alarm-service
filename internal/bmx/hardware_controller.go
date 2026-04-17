@@ -38,8 +38,9 @@ type Gyroscope interface {
 	SoftReset() error
 }
 
-// InterruptPoller interface for enabling/disabling interrupt polling
-type InterruptPoller interface {
+// InterruptSource is something that can be gated in lockstep with the BMX055
+// mapping changes — the I2C poller and the evdev watcher both implement it.
+type InterruptSource interface {
 	Enable()
 	Disable()
 }
@@ -48,18 +49,22 @@ type InterruptPoller interface {
 type HardwareController struct {
 	accel       Accelerometer
 	gyro        Gyroscope
-	poller      InterruptPoller
+	poller      InterruptSource
+	watcher     InterruptSource
 	log         *slog.Logger
 	currentMode hwbmx.InterruptMode
 }
 
-// NewHardwareController creates a new hardware controller
-func NewHardwareController(accel Accelerometer, gyro Gyroscope, poller InterruptPoller, log *slog.Logger) *HardwareController {
+// NewHardwareController creates a new hardware controller. watcher may be nil
+// if the evdev-based interrupt source is unavailable (e.g. pre-DT-change
+// kernels); the I2C poller alone is sufficient in that case.
+func NewHardwareController(accel Accelerometer, gyro Gyroscope, poller InterruptSource, watcher InterruptSource, log *slog.Logger) *HardwareController {
 	return &HardwareController{
-		accel:  accel,
-		gyro:   gyro,
-		poller: poller,
-		log:    log,
+		accel:   accel,
+		gyro:    gyro,
+		poller:  poller,
+		watcher: watcher,
+		log:     log,
 	}
 }
 
@@ -194,11 +199,14 @@ func (c *HardwareController) EnableInterrupt(ctx context.Context) error {
 		}
 	}
 
+	if c.watcher != nil {
+		c.watcher.Enable()
+	}
 	c.poller.Enable()
 	return nil
 }
 
-// DisableInterrupt disables both interrupt engines and the poller.
+// DisableInterrupt disables both interrupt engines, the poller, and the watcher.
 func (c *HardwareController) DisableInterrupt(ctx context.Context) error {
 	c.log.Info("disabling interrupt")
 
@@ -210,7 +218,10 @@ func (c *HardwareController) DisableInterrupt(ctx context.Context) error {
 		errs = append(errs, err)
 	}
 
-	// Always disable the poller even if hardware disable fails.
+	// Always disable the poller and watcher even if hardware disable fails.
+	if c.watcher != nil {
+		c.watcher.Disable()
+	}
 	c.poller.Disable()
 
 	if len(errs) > 0 {

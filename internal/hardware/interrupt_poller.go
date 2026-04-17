@@ -11,20 +11,26 @@ import (
 	"alarm-service/internal/redis"
 )
 
-// InterruptPoller monitors for motion interrupts and publishes to Redis
+// InterruptPoller monitors for motion interrupts and publishes to Redis.
+// When the evdev InterruptWatcher is running it is the fast path; this poller
+// then acts as a watchdog at a much slower rate, catching anything the evdev
+// path might have dropped and keeping the BMX055 latch clear.
 type InterruptPoller struct {
 	accel     *bmx.Accelerometer
 	gyro      *bmx.Gyroscope
 	publisher *redis.Publisher
 	log       *slog.Logger
+	interval  time.Duration
 	enabled   atomic.Bool
 }
 
-// NewInterruptPoller creates a new InterruptPoller
+// NewInterruptPoller creates a new InterruptPoller. interval sets how often
+// the status register is read while the poller is enabled.
 func NewInterruptPoller(
 	accel *bmx.Accelerometer,
 	gyro *bmx.Gyroscope,
 	publisher *redis.Publisher,
+	interval time.Duration,
 	log *slog.Logger,
 ) *InterruptPoller {
 	return &InterruptPoller{
@@ -32,6 +38,7 @@ func NewInterruptPoller(
 		gyro:      gyro,
 		publisher: publisher,
 		log:       log,
+		interval:  interval,
 	}
 }
 
@@ -49,9 +56,9 @@ func (p *InterruptPoller) Disable() {
 
 // Run starts the interrupt polling loop
 func (p *InterruptPoller) Run(ctx context.Context) {
-	p.log.Info("starting interrupt poller")
+	p.log.Info("starting interrupt poller", "interval", p.interval)
 
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(p.interval)
 	defer ticker.Stop()
 
 	for {
