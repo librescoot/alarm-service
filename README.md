@@ -68,12 +68,38 @@ Flags:
 
 - `HGET settings alarm.enabled` - Alarm enabled (true/false)
 - `HGET settings alarm.honk` - Horn enabled during alarm (true/false)
+- `HGET settings alarm.duration` - Alarm duration in seconds
+- `HGET settings alarm.hairtrigger` - Short honk on first motion (true/false)
+- `HGET settings alarm.hairtrigger-duration` - Hair-trigger honk duration in seconds
+- `HGET settings alarm.l1-cooldown` - Level 1 cooldown duration in seconds
+- `HGET settings alarm.seatbox-trigger` - Unauthorized seatbox opening triggers alarm (true/false)
+- `HGET settings alarm.sensitivity` - Motion sensitivity in armed state: `low`, `medium`, `high`
+- `HGET settings alarm.trigger.motion` - BMX055 motion triggers alarm (true/false, default true)
+- `HGET settings alarm.trigger.buttons` - Brake/horn/seatbox button presses trigger alarm (true/false, default true)
+- `HGET settings alarm.trigger.handlebar` - Handlebar lock sensor / position triggers alarm (true/false, default true)
+
+### Trigger Sources
+
+Each source can be disabled independently via its `alarm.trigger.*` setting. Defaults are all-on. For the Berlin-vibration "inputs-only" mode, set `alarm.trigger.motion=false` and leave the others on.
+
+| Source | Signal | Needs vehicle-service in Standby |
+|---|---|---|
+| Motion | `bmx:interrupt` channel (BMX055 accelerometer) | — |
+| Buttons | `buttons` channel (brake:{left,right}:on, seatbox:on, horn:on) | Already live in Standby |
+| Handlebar lock | `vehicle.handlebar:lock-sensor` = unlocked | Already live in Standby |
+| Handlebar position | `vehicle.handlebar:position` = off-place | Already live in Standby |
+| Seatbox lock | `vehicle.seatbox:lock` = open + no authorized-open event | Already live in Standby |
+
+#### Throttle is not a supported trigger source
+
+The thumb throttle is a Hall sensor wired to the Bosch/Votol ECU, not to the MDB. Its state is only visible as a CAN-bus payload from the ECU. In Standby the ECU's 12V rail is cut — CAN goes silent, no throttle data flows. Exposing throttle to the alarm service would require keeping the ECU powered while the scooter is locked, which defeats Standby's power budget. Kickstand, brakes, handlebar lock, and handlebar position cover the "deliberate physical input" use case from [librescoot issue #26](https://github.com/librescoot/librescoot/issues/26) without that cost.
 
 ### Subscribed Channels
 
-- `vehicle` - Vehicle state changes (payload: "state")
-- `settings` - Settings changes (payload: "alarm.enabled" or "alarm.honk")
+- `vehicle` - Vehicle state + seatbox lock + handlebar lock/position updates
+- `settings` - Settings changes (alarm.*)
 - `bmx:interrupt` - Motion detection from integrated BMX055 hardware
+- `buttons` - Physical button edges from vehicle-service (brake/seatbox/horn/blinker)
 
 ### Published Status
 
@@ -128,12 +154,15 @@ redis-cli LPUSH scooter:alarm enable
 
 ## State-Specific Behavior
 
-| State | Wake Lock | Sensitivity | INT Pin |
-|-------|-----------|-------------|---------|
-| armed | No | MEDIUM | NONE |
-| delay_armed | Yes | LOW | INT2 |
-| trigger_level_1 | Yes | MEDIUM | NONE |
-| trigger_level_2 | Yes | HIGH | NONE |
+| State | Wake Lock | Sensor config | INT Pin |
+|-------|-----------|---------------|---------|
+| armed | No | any-motion, bandwidth 31.25 Hz, threshold per `alarm.sensitivity` (low=0x08, medium=0x04, high=0x02) | BOTH |
+| delay_armed | Yes | slow-motion idle (threshold 0x14) | INT2 |
+| trigger_level_1 | Yes | slow-motion, bandwidth 15.63 Hz, threshold 0x08 | BOTH |
+| trigger_level_2 | Yes | slow-motion idle | — |
+| waiting_movement | Yes | slow-motion, bandwidth 7.81 Hz, threshold 0x06 (at t=47s) | NONE |
+
+`alarm.sensitivity` tunes the armed-state threshold only; escalation stages (L1 confirm, L2 re-trigger) stay fixed.
 
 ## License
 

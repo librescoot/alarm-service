@@ -939,3 +939,176 @@ func TestStateMachine_InitToArmedSkipsDelay(t *testing.T) {
 		t.Error("expected interrupt to be enabled in armed state")
 	}
 }
+
+// InputTriggerEvent in StateArmed must escalate to TriggerLevel1Wait, same as
+// a BMXInterruptEvent. Covers 0679 (buttons) and nor4 (handlebar).
+func TestStateMachine_ArmedInputTriggerEscalatesToL1Wait(t *testing.T) {
+	sm, _, _, inh, alarm := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+
+	sm.SendEvent(InputTriggerEvent{Source: TriggerSourceBrakeLeft})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateTriggerLevel1Wait {
+		t.Errorf("expected StateTriggerLevel1Wait on input trigger, got %s", sm.State())
+	}
+	if !inh.acquired {
+		t.Error("expected inhibitor acquired in L1 wait")
+	}
+	if alarm.blinkCalled != 1 {
+		t.Errorf("expected hazards to blink once entering L1 wait, got %d", alarm.blinkCalled)
+	}
+}
+
+// InputTriggerEvent in StateTriggerLevel1 must escalate to L2 and blink
+// hazards, just like a BMXInterruptEvent at that point.
+func TestStateMachine_Level1InputTriggerEscalatesToL2(t *testing.T) {
+	sm, _, _, _, alarm := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateTriggerLevel1
+	sm.alarmDuration = 10
+
+	sm.SendEvent(InputTriggerEvent{Source: TriggerSourceHandlebarLock})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateTriggerLevel2 {
+		t.Errorf("expected StateTriggerLevel2, got %s", sm.State())
+	}
+	if !alarm.active {
+		t.Error("expected alarm to be active in level 2")
+	}
+	if alarm.blinkCalled != 1 {
+		t.Errorf("expected hazards to blink once during L1->L2, got %d", alarm.blinkCalled)
+	}
+}
+
+// Motion trigger source disabled — BMX events must be dropped without a state
+// change. Input triggers must still work. Covers u565.
+func TestStateMachine_MotionDisabledDropsBMXKeepsInputs(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.motionEnabled = false
+
+	sm.SendEvent(BMXInterruptEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+	if sm.State() != StateArmed {
+		t.Errorf("expected StateArmed (motion disabled), got %s", sm.State())
+	}
+
+	sm.SendEvent(InputTriggerEvent{Source: TriggerSourceBrakeLeft})
+	sm.handleEvent(ctx, <-sm.events)
+	if sm.State() != StateTriggerLevel1Wait {
+		t.Errorf("expected StateTriggerLevel1Wait on input trigger, got %s", sm.State())
+	}
+}
+
+// TriggerSourceSettingChangedEvent updates the FSM's per-source flag without
+// transitioning, and the flag takes effect on subsequent events.
+func TestStateMachine_TriggerSourceSettingChange(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	if !sm.motionEnabled {
+		t.Fatal("motion should default enabled")
+	}
+
+	sm.SendEvent(TriggerSourceSettingChangedEvent{Category: TriggerCategoryMotion, Enabled: false})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.motionEnabled {
+		t.Error("motion should be disabled after setting change")
+	}
+	if sm.State() != StateArmed {
+		t.Errorf("state should not change on setting update, got %s", sm.State())
+	}
+}
+
+// Sensitivity setting flows into the armed sensor config. Covers 2uyg.
+func TestStateMachine_SensitivityChangeArmedReconfigures(t *testing.T) {
+	sm, bmx, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+
+	sm.SendEvent(SensitivityChangedEvent{Sensitivity: SensitivityLow})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.sensitivity != SensitivityLow {
+		t.Errorf("expected sensitivity low, got %s", sm.sensitivity.String())
+	}
+	if bmx.lastConfig.Threshold != sensorArmedLow.Threshold {
+		t.Errorf("expected armed sensor reconfigured to low threshold 0x%x, got 0x%x",
+			sensorArmedLow.Threshold, bmx.lastConfig.Threshold)
+	}
+	if !bmx.interruptEnabled {
+		t.Error("expected interrupt re-enabled after sensitivity change in armed")
+	}
+}
+
+// Sensitivity change outside armed must not reconfigure the sensor.
+func TestStateMachine_SensitivityChangeInactiveSkipsReconfig(t *testing.T) {
+	sm, bmx, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateDisarmed
+	bmx.lastConfig = SensorConfig{} // reset spy
+
+	sm.SendEvent(SensitivityChangedEvent{Sensitivity: SensitivityHigh})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.sensitivity != SensitivityHigh {
+		t.Errorf("expected sensitivity high, got %s", sm.sensitivity.String())
+	}
+	if bmx.lastConfig.Threshold != 0 {
+		t.Error("expected no reconfigure outside armed state")
+	}
+}
+
+// Entering Armed with a non-default sensitivity must apply the matching
+// sensor config.
+func TestStateMachine_ArmedAppliesSensitivity(t *testing.T) {
+	sm, bmx, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateDelayArmed
+	sm.sensitivity = SensitivityHigh
+
+	sm.SendEvent(DelayArmedTimerEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateArmed {
+		t.Fatalf("expected StateArmed, got %s", sm.State())
+	}
+	if bmx.lastConfig.Threshold != sensorArmedHigh.Threshold {
+		t.Errorf("expected high threshold 0x%x, got 0x%x",
+			sensorArmedHigh.Threshold, bmx.lastConfig.Threshold)
+	}
+}
+
+// WaitingMovement must escalate to L2 on InputTrigger the same way it does
+// on BMXInterrupt, and increment the cycle counter.
+func TestStateMachine_WaitingMovementInputTriggerEscalates(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateWaitingMovement
+	sm.level2Cycles = 1
+
+	sm.SendEvent(InputTriggerEvent{Source: TriggerSourceHornButton})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateTriggerLevel2 {
+		t.Errorf("expected StateTriggerLevel2, got %s", sm.State())
+	}
+	if sm.level2Cycles != 2 {
+		t.Errorf("expected level2Cycles 2, got %d", sm.level2Cycles)
+	}
+}

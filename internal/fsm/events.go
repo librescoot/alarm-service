@@ -67,6 +67,91 @@ type BMXInterruptEvent struct {
 
 func (e BMXInterruptEvent) Type() string { return "bmx_interrupt" }
 
+// TriggerSource identifies which discrete input caused an InputTriggerEvent.
+// Motion and seatbox are kept on their own event types for historical reasons;
+// this covers the additional non-motion sources (buttons, handlebar sensors).
+type TriggerSource int
+
+const (
+	TriggerSourceUnknown TriggerSource = iota
+	TriggerSourceBrakeLeft
+	TriggerSourceBrakeRight
+	TriggerSourceSeatboxButton
+	TriggerSourceHornButton
+	TriggerSourceHandlebarLock
+	TriggerSourceHandlebarPosition
+)
+
+func (s TriggerSource) String() string {
+	switch s {
+	case TriggerSourceBrakeLeft:
+		return "brake_left"
+	case TriggerSourceBrakeRight:
+		return "brake_right"
+	case TriggerSourceSeatboxButton:
+		return "seatbox_button"
+	case TriggerSourceHornButton:
+		return "horn_button"
+	case TriggerSourceHandlebarLock:
+		return "handlebar_lock"
+	case TriggerSourceHandlebarPosition:
+		return "handlebar_position"
+	default:
+		return "unknown"
+	}
+}
+
+// InputTriggerEvent signals tamper detected via a discrete input other than
+// the BMX accelerometer — brake levers, handlebar buttons, handlebar lock
+// sensor, handlebar position sensor. Treated by the FSM like BMXInterruptEvent
+// for escalation purposes. Emitted by the subscriber only when the matching
+// per-source flag is enabled.
+type InputTriggerEvent struct {
+	Source TriggerSource
+}
+
+func (e InputTriggerEvent) Type() string { return "input_trigger" }
+
+// TriggerSourceCategory groups the per-source enable flags exposed on the
+// settings hash. Motion and seatbox get their own categories; other discrete
+// inputs split into "buttons" and "handlebar" for coarser-grained control.
+type TriggerSourceCategory int
+
+const (
+	TriggerCategoryMotion TriggerSourceCategory = iota
+	TriggerCategoryButtons
+	TriggerCategoryHandlebar
+)
+
+func (c TriggerSourceCategory) String() string {
+	switch c {
+	case TriggerCategoryMotion:
+		return "motion"
+	case TriggerCategoryButtons:
+		return "buttons"
+	case TriggerCategoryHandlebar:
+		return "handlebar"
+	default:
+		return "unknown"
+	}
+}
+
+// TriggerSourceSettingChangedEvent signals that a per-source trigger enable
+// flag was toggled via the settings hash.
+type TriggerSourceSettingChangedEvent struct {
+	Category TriggerSourceCategory
+	Enabled  bool
+}
+
+func (e TriggerSourceSettingChangedEvent) Type() string { return "trigger_source_setting_changed" }
+
+// SensitivityChangedEvent signals that alarm.sensitivity changed.
+type SensitivityChangedEvent struct {
+	Sensitivity Sensitivity
+}
+
+func (e SensitivityChangedEvent) Type() string { return "sensitivity_changed" }
+
 // RuntimeArmEvent forces the FSM to arm without changing alarm.enabled
 type RuntimeArmEvent struct{}
 
