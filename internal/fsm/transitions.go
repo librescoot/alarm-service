@@ -98,6 +98,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 			}
 			return StateTriggerLevel1Wait
 		}
+		if _, ok := event.(InputTriggerEvent); ok {
+			return StateTriggerLevel1Wait
+		}
 		if e, ok := event.(VehicleStateChangedEvent); ok && shouldDisarmForVehicleState(e.State) {
 			sm.vehicleStandby = false
 			return StateDisarmed
@@ -150,6 +153,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(BMXInterruptEvent); ok {
 			return StateTriggerLevel2
 		}
+		if _, ok := event.(InputTriggerEvent); ok {
+			return StateTriggerLevel2
+		}
 		if e, ok := event.(VehicleStateChangedEvent); ok && shouldDisarmForVehicleState(e.State) {
 			sm.vehicleStandby = false
 			return StateDisarmed
@@ -185,7 +191,7 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(Level2CheckTimerEvent); ok {
 			return StateDelayArmed
 		}
-		if _, ok := event.(BMXInterruptEvent); ok {
+		if isTamperTrigger(event) {
 			sm.level2Cycles++
 			if sm.level2Cycles >= 4 {
 				return StateDisarmed

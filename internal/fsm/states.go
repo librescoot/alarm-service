@@ -80,7 +80,7 @@ func (sm *StateMachine) onEnterArmed(ctx context.Context) {
 
 	sm.inhibitor.Release()
 
-	sm.configureBMX(ctx, InterruptPinBoth, sensorArmed)
+	sm.configureBMX(ctx, InterruptPinBoth, sensorArmedFor(sm.sensitivity))
 
 	if err := sm.bmxClient.EnableInterrupt(ctx); err != nil {
 		sm.log.Error("failed to enable interrupt", "error", err)

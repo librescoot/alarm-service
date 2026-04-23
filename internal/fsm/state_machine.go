@@ -60,6 +60,20 @@ func (s Sensitivity) String() string {
 	}
 }
 
+// ParseSensitivity parses a sensitivity string. Unknown values map to medium.
+func ParseSensitivity(s string) Sensitivity {
+	switch s {
+	case "low":
+		return SensitivityLow
+	case "medium":
+		return SensitivityMedium
+	case "high":
+		return SensitivityHigh
+	default:
+		return SensitivityMedium
+	}
+}
+
 // InterruptPin represents BMX interrupt pin
 type InterruptPin int
 
@@ -112,6 +126,10 @@ type StateMachine struct {
 	seatboxLockClosed    bool
 	initWakeL1           bool // L1 triggered from stale BMX latch during startup
 	wakeFromHibernation  bool // woken from hibernation by nRF52 accelerometer
+	sensitivity          Sensitivity
+	motionEnabled        bool // alarm.trigger.motion: false means ignore BMX triggers
+	buttonsEnabled       bool // alarm.trigger.buttons: enables brake/horn/seatbox button triggers
+	handlebarEnabled     bool // alarm.trigger.handlebar: enables handlebar lock/position triggers
 }
 
 // SensorConfig mirrors hwbmx.SensorConfig at the FSM layer to avoid an import cycle.
@@ -127,8 +145,18 @@ var (
 	// sensorIdle: low-BW slow-motion used in init/delay/disarmed states (interrupt disabled).
 	sensorIdle = SensorConfig{AnyMotion: false, Bandwidth: 0x08, Threshold: 0x14, Duration: 0x02}
 
-	// sensorArmed: any-motion at 31.25 Hz — catches dog bumps and brief contact (~32 ms).
-	sensorArmed = SensorConfig{AnyMotion: true, Bandwidth: 0x0A, Threshold: 0x04, Duration: 0x01}
+	// sensorArmedLow: any-motion at 31.25 Hz with relaxed threshold. Ignores
+	// ground-borne vibration (subways, trams, trucks); still catches
+	// deliberate pushes. Threshold 0x08 (~32 mg), 2 samples.
+	sensorArmedLow = SensorConfig{AnyMotion: true, Bandwidth: 0x0A, Threshold: 0x08, Duration: 0x01}
+
+	// sensorArmedMedium (default): any-motion at 31.25 Hz. Catches dog bumps
+	// and brief contact (~32 ms). Threshold 0x04 (~16 mg), 2 samples.
+	sensorArmedMedium = SensorConfig{AnyMotion: true, Bandwidth: 0x0A, Threshold: 0x04, Duration: 0x01}
+
+	// sensorArmedHigh: any-motion at 31.25 Hz with tight threshold. Paranoid
+	// mode for quiet parking environments. Threshold 0x02 (~8 mg), 2 samples.
+	sensorArmedHigh = SensorConfig{AnyMotion: true, Bandwidth: 0x0A, Threshold: 0x02, Duration: 0x01}
 
 	// sensorLevel1: slow-motion at 15.63 Hz — confirms deliberate push/tilt (~256 ms).
 	sensorLevel1 = SensorConfig{AnyMotion: false, Bandwidth: 0x09, Threshold: 0x08, Duration: 0x03}
@@ -136,6 +164,18 @@ var (
 	// sensorWaiting: slow-motion at 7.81 Hz — conservative re-trigger for L2 (~512 ms).
 	sensorWaiting = SensorConfig{AnyMotion: false, Bandwidth: 0x08, Threshold: 0x06, Duration: 0x03}
 )
+
+// sensorArmedFor returns the armed-state sensor config for a given sensitivity.
+func sensorArmedFor(s Sensitivity) SensorConfig {
+	switch s {
+	case SensitivityLow:
+		return sensorArmedLow
+	case SensitivityHigh:
+		return sensorArmedHigh
+	default:
+		return sensorArmedMedium
+	}
+}
 
 // BMXClient interface for BMX commands
 type BMXClient interface {
@@ -201,7 +241,22 @@ func New(
 		l1CooldownDuration:  5,
 		preSeatboxState:     StateInit,
 		seatboxLockClosed:   true,
+		sensitivity:         SensitivityMedium,
+		motionEnabled:       true,
+		buttonsEnabled:      true,
+		handlebarEnabled:    true,
 	}
+}
+
+// isTamperTrigger reports whether an event should be treated as a tamper
+// trigger (BMX motion or a discrete input). Both feed the same escalation
+// path.
+func isTamperTrigger(e Event) bool {
+	switch e.(type) {
+	case BMXInterruptEvent, InputTriggerEvent:
+		return true
+	}
+	return false
 }
 
 // Run runs the state machine event loop
@@ -289,6 +344,43 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 		return
 	}
 
+	if e, ok := event.(TriggerSourceSettingChangedEvent); ok {
+		switch e.Category {
+		case TriggerCategoryMotion:
+			sm.motionEnabled = e.Enabled
+		case TriggerCategoryButtons:
+			sm.buttonsEnabled = e.Enabled
+		case TriggerCategoryHandlebar:
+			sm.handlebarEnabled = e.Enabled
+		}
+		sm.log.Info("trigger source setting updated", "category", e.Category.String(), "enabled", e.Enabled)
+		return
+	}
+
+	if e, ok := event.(SensitivityChangedEvent); ok {
+		if sm.sensitivity == e.Sensitivity {
+			return
+		}
+		sm.sensitivity = e.Sensitivity
+		sm.log.Info("sensitivity updated", "sensitivity", e.Sensitivity.String())
+		if sm.state == StateArmed {
+			sm.log.Info("reconfiguring armed sensor for new sensitivity")
+			sm.configureBMX(sm.ctx, InterruptPinBoth, sensorArmedFor(sm.sensitivity))
+			if err := sm.bmxClient.EnableInterrupt(sm.ctx); err != nil {
+				sm.log.Error("failed to re-enable interrupt after sensitivity change", "error", err)
+			}
+		}
+		return
+	}
+
+	// Drop motion triggers if the motion source is disabled. InputTriggerEvent
+	// is already pre-filtered at the subscriber layer, so we only need to
+	// gate BMX here.
+	if _, ok := event.(BMXInterruptEvent); ok && !sm.motionEnabled {
+		sm.log.Debug("dropping BMX interrupt (motion trigger source disabled)")
+		return
+	}
+
 	oldState := sm.state
 	sm.log.Debug("handling event",
 		"event", event.Type(),
@@ -297,13 +389,12 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 	newState := sm.getTransition(event)
 
 	if newState != oldState {
-		// Blink hazards when movement detected during L1 (before L2 activation)
-		if oldState == StateTriggerLevel1 && newState == StateTriggerLevel2 {
-			if _, ok := event.(BMXInterruptEvent); ok {
-				sm.log.Info("movement detected during L1, blinking hazards")
-				if err := sm.alarmController.BlinkHazards(); err != nil {
-					sm.log.Error("failed to blink hazards", "error", err)
-				}
+		// Blink hazards when tampering detected during L1 (before L2 activation).
+		// Either motion or discrete input counts.
+		if oldState == StateTriggerLevel1 && newState == StateTriggerLevel2 && isTamperTrigger(event) {
+			sm.log.Info("tampering detected during L1, blinking hazards", "event", event.Type())
+			if err := sm.alarmController.BlinkHazards(); err != nil {
+				sm.log.Error("failed to blink hazards", "error", err)
 			}
 		}
 
