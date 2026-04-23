@@ -102,10 +102,10 @@ func (s TriggerSource) String() string {
 }
 
 // InputTriggerEvent signals tamper detected via a discrete input other than
-// the BMX accelerometer — brake levers, handlebar buttons, handlebar lock
-// sensor, handlebar position sensor. Treated by the FSM like BMXInterruptEvent
-// for escalation purposes. Emitted by the subscriber only when the matching
-// per-source flag is enabled.
+// the BMX accelerometer (brake levers, handlebar buttons, handlebar lock
+// sensor, handlebar position sensor). Treated by the FSM like
+// BMXInterruptEvent for escalation purposes. Emitted by the subscriber only
+// when the matching per-source flag is enabled.
 type InputTriggerEvent struct {
 	Source TriggerSource
 }

@@ -11,6 +11,13 @@ import (
 	ipc "github.com/librescoot/redis-ipc"
 )
 
+// eventSink is the subset of fsm.StateMachine the subscriber needs. Extracted
+// so unit tests can verify event dispatch without constructing a full FSM.
+type eventSink interface {
+	SendEvent(fsm.Event)
+	State() fsm.State
+}
+
 // Subscriber handles subscribing to Redis channels using HashWatcher
 type Subscriber struct {
 	vehicleWatcher          *ipc.HashWatcher
@@ -19,17 +26,25 @@ type Subscriber struct {
 	buttonsWatcher          *ipc.Subscription[string]
 	ipc                     *ipc.Client
 	log                     *slog.Logger
-	sm                      *fsm.StateMachine
+	sm                      eventSink
 	seatboxTriggerEnabled   bool
 	authorizedSeatboxPending bool
 
 	// Per-source trigger enable flags. Mirror the FSM's own copy so the
 	// subscriber can drop events at the source without waking the FSM, and
-	// notify the FSM for its own bookkeeping on change. Default true — users
+	// notify the FSM for its own bookkeeping on change. Default true; users
 	// opt *out* of a source to get the "inputs-only" or "motion-only" preset.
 	flagMu           sync.RWMutex
 	buttonsEnabled   bool
 	handlebarEnabled bool
+
+	// Previous values for hash fields that represent tamper state. Used to
+	// distinguish genuine safe->unsafe transitions from StartWithSync's
+	// initial-value delivery. Many scooters park with the handlebar lock
+	// never engaged, so "unlocked" is a legitimate resting value we must
+	// not treat as a trigger on service startup.
+	handlebarLockLast string
+	handlebarPosLast  string
 }
 
 // NewSubscriber creates a new Subscriber with HashWatcher instances
@@ -104,37 +119,58 @@ func (s *Subscriber) setupVehicleWatcher() {
 		return nil
 	})
 
-	// Handlebar lock sensor — "unlocked" while armed means someone pulled the
-	// lock bolt without authorization.
-	s.vehicleWatcher.OnField("handlebar:lock-sensor", func(lockState string) error {
-		s.log.Debug("handlebar lock sensor changed", "state", lockState)
-		if lockState != "unlocked" {
-			return nil
-		}
-		if !s.getHandlebarEnabled() {
-			s.log.Debug("handlebar unlocked but handlebar trigger disabled")
-			return nil
-		}
-		s.log.Info("handlebar unlocked — sending input trigger")
-		s.sm.SendEvent(fsm.InputTriggerEvent{Source: fsm.TriggerSourceHandlebarLock})
-		return nil
-	})
+	// Handlebar lock sensor. See handleHandlebarLockField for semantics.
+	s.vehicleWatcher.OnField("handlebar:lock-sensor", s.handleHandlebarLockField)
 
-	// Handlebar position sensor — "off-place" while armed means the bars were
-	// moved away from their locked-straight position.
-	s.vehicleWatcher.OnField("handlebar:position", func(pos string) error {
-		s.log.Debug("handlebar position changed", "position", pos)
-		if pos != "off-place" {
-			return nil
-		}
-		if !s.getHandlebarEnabled() {
-			s.log.Debug("handlebar off-place but handlebar trigger disabled")
-			return nil
-		}
-		s.log.Info("handlebar off-place — sending input trigger")
-		s.sm.SendEvent(fsm.InputTriggerEvent{Source: fsm.TriggerSourceHandlebarPosition})
+	// Handlebar position sensor. See handleHandlebarPositionField for semantics.
+	s.vehicleWatcher.OnField("handlebar:position", s.handleHandlebarPositionField)
+}
+
+// handleHandlebarLockField emits an InputTriggerEvent only on a genuine
+// safe->unsafe transition observed after the initial sync. Scooters routinely
+// park with the handlebar lock never engaged, so "unlocked" is often the
+// resting value. Triggering on StartWithSync's initial delivery would fire
+// the alarm on every service restart of an already-armed scooter.
+func (s *Subscriber) handleHandlebarLockField(lockState string) error {
+	prev := s.handlebarLockLast
+	s.handlebarLockLast = lockState
+	if prev == "" {
+		s.log.Debug("handlebar lock baseline captured", "state", lockState)
 		return nil
-	})
+	}
+	if lockState != "unlocked" || prev == "unlocked" {
+		return nil
+	}
+	if !s.getHandlebarEnabled() {
+		s.log.Debug("handlebar unlocked transition ignored (handlebar trigger disabled)")
+		return nil
+	}
+	s.log.Info("handlebar lock transition to unlocked, sending input trigger", "prev", prev)
+	s.sm.SendEvent(fsm.InputTriggerEvent{Source: fsm.TriggerSourceHandlebarLock})
+	return nil
+}
+
+// handleHandlebarPositionField is the position-sensor counterpart. Same
+// rationale: if the rider parked without turning the bars, "off-place" is
+// the resting value and must not trigger on startup. Only on-place to
+// off-place transitions count.
+func (s *Subscriber) handleHandlebarPositionField(pos string) error {
+	prev := s.handlebarPosLast
+	s.handlebarPosLast = pos
+	if prev == "" {
+		s.log.Debug("handlebar position baseline captured", "position", pos)
+		return nil
+	}
+	if pos != "off-place" || prev == "off-place" {
+		return nil
+	}
+	if !s.getHandlebarEnabled() {
+		s.log.Debug("handlebar off-place transition ignored (handlebar trigger disabled)")
+		return nil
+	}
+	s.log.Info("handlebar position transition to off-place, sending input trigger", "prev", prev)
+	s.sm.SendEvent(fsm.InputTriggerEvent{Source: fsm.TriggerSourceHandlebarPosition})
+	return nil
 }
 
 // parseBoolSetting accepts the common Redis-flavored truthy strings.
@@ -320,15 +356,15 @@ func (s *Subscriber) handleButtonEvent(payload string) error {
 		s.log.Debug("button press ignored (buttons trigger disabled)", "source", source.String())
 		return nil
 	}
-	s.log.Info("button press — sending input trigger", "source", source.String())
+	s.log.Info("button press, sending input trigger", "source", source.String())
 	s.sm.SendEvent(fsm.InputTriggerEvent{Source: source})
 	return nil
 }
 
 // parseButtonPayload recognizes the subset of `buttons` channel payloads we
-// want to act on as tamper triggers. Blinker and throttle are ignored here —
-// blinkers because they are ambient navigation signals, throttle because it
-// is not exposed while the ECU is off.
+// want to act on as tamper triggers. Blinker and throttle are ignored:
+// blinkers are ambient navigation signals, and throttle is not exposed
+// while the ECU is off.
 func parseButtonPayload(payload string) (fsm.TriggerSource, string, bool) {
 	parts := strings.Split(payload, ":")
 	switch len(parts) {

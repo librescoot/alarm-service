@@ -127,9 +127,9 @@ type StateMachine struct {
 	initWakeL1           bool // L1 triggered from stale BMX latch during startup
 	wakeFromHibernation  bool // woken from hibernation by nRF52 accelerometer
 	sensitivity          Sensitivity
-	motionEnabled        bool // alarm.trigger.motion — false = ignore BMX triggers
-	buttonsEnabled       bool // alarm.trigger.buttons — enables brake/horn/seatbox button triggers
-	handlebarEnabled     bool // alarm.trigger.handlebar — enables handlebar lock/position triggers
+	motionEnabled        bool // alarm.trigger.motion: false means ignore BMX triggers
+	buttonsEnabled       bool // alarm.trigger.buttons: enables brake/horn/seatbox button triggers
+	handlebarEnabled     bool // alarm.trigger.handlebar: enables handlebar lock/position triggers
 }
 
 // SensorConfig mirrors hwbmx.SensorConfig at the FSM layer to avoid an import cycle.
@@ -145,17 +145,17 @@ var (
 	// sensorIdle: low-BW slow-motion used in init/delay/disarmed states (interrupt disabled).
 	sensorIdle = SensorConfig{AnyMotion: false, Bandwidth: 0x08, Threshold: 0x14, Duration: 0x02}
 
-	// sensorArmedLow: any-motion at 31.25 Hz with relaxed threshold — ignores
-	// ground-borne vibration (subways, trams, trucks), still catches deliberate
-	// pushes. threshold 0x08 (~32 mg), 2 samples.
+	// sensorArmedLow: any-motion at 31.25 Hz with relaxed threshold. Ignores
+	// ground-borne vibration (subways, trams, trucks); still catches
+	// deliberate pushes. Threshold 0x08 (~32 mg), 2 samples.
 	sensorArmedLow = SensorConfig{AnyMotion: true, Bandwidth: 0x0A, Threshold: 0x08, Duration: 0x01}
 
-	// sensorArmedMedium (default): any-motion at 31.25 Hz — catches dog bumps
-	// and brief contact (~32 ms). threshold 0x04 (~16 mg), 2 samples.
+	// sensorArmedMedium (default): any-motion at 31.25 Hz. Catches dog bumps
+	// and brief contact (~32 ms). Threshold 0x04 (~16 mg), 2 samples.
 	sensorArmedMedium = SensorConfig{AnyMotion: true, Bandwidth: 0x0A, Threshold: 0x04, Duration: 0x01}
 
-	// sensorArmedHigh: any-motion at 31.25 Hz with tight threshold — paranoid
-	// mode for quiet parking environments. threshold 0x02 (~8 mg), 2 samples.
+	// sensorArmedHigh: any-motion at 31.25 Hz with tight threshold. Paranoid
+	// mode for quiet parking environments. Threshold 0x02 (~8 mg), 2 samples.
 	sensorArmedHigh = SensorConfig{AnyMotion: true, Bandwidth: 0x0A, Threshold: 0x02, Duration: 0x01}
 
 	// sensorLevel1: slow-motion at 15.63 Hz — confirms deliberate push/tilt (~256 ms).
@@ -249,7 +249,8 @@ func New(
 }
 
 // isTamperTrigger reports whether an event should be treated as a tamper
-// trigger — BMX motion or a discrete input. Both feed the same escalation path.
+// trigger (BMX motion or a discrete input). Both feed the same escalation
+// path.
 func isTamperTrigger(e Event) bool {
 	switch e.(type) {
 	case BMXInterruptEvent, InputTriggerEvent:

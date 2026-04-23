@@ -92,7 +92,7 @@ Each source can be disabled independently via its `alarm.trigger.*` setting. Def
 
 #### Throttle is not a supported trigger source
 
-The thumb throttle is a Hall sensor wired to the Bosch/Votol ECU, not to the MDB. Its state is only visible as a CAN-bus payload from the ECU. In Standby the ECU's 12V rail is cut — CAN goes silent, no throttle data flows. Exposing throttle to the alarm service would require keeping the ECU powered while the scooter is locked, which defeats Standby's power budget. Kickstand, brakes, handlebar lock, and handlebar position cover the "deliberate physical input" use case from [librescoot issue #26](https://github.com/librescoot/librescoot/issues/26) without that cost.
+The thumb throttle is a Hall sensor wired to the Bosch/Votol ECU, not to the MDB. Its state is only visible as a CAN-bus payload from the ECU. In Standby the ECU's 12V rail is cut, CAN goes silent, and no throttle data flows. Exposing throttle to the alarm service would require keeping the ECU powered while the scooter is locked, which defeats Standby's power budget. Kickstand, brakes, handlebar lock, and handlebar position cover the "deliberate physical input" use case from [librescoot issue #26](https://github.com/librescoot/librescoot/issues/26) without that cost.
 
 ### Subscribed Channels
 
