@@ -129,16 +129,15 @@ var (
 	sensorIdle = SensorConfig{AnyMotion: false, Bandwidth: 0x08, Threshold: 0x14, Duration: 0x02}
 
 	// sensorArmed: any-motion at 31.25 Hz — awake-armed profile, requires 64 ms of
-	// sustained slope above ~31 mg. Catches contact (hand, kid, dog leaning) while
-	// rejecting brief vibration spikes from passing trucks/trams.
-	sensorArmed = SensorConfig{AnyMotion: true, Bandwidth: 0x0A, Threshold: 0x08, Duration: 0x03}
+	// sustained slope above ~23 mg. Catches contact (hand, kid, dog leaning) while
+	// still rejecting brief vibration spikes from passing trucks/trams.
+	sensorArmed = SensorConfig{AnyMotion: true, Bandwidth: 0x0A, Threshold: 0x06, Duration: 0x03}
 
-	// sensorArmedHibernation: any-motion at 7.81 Hz — hibernation-armed profile,
-	// requires 256 ms of sustained slope above ~125 mg. Programmed into the BMX
-	// just before hibernation so the wake threshold survives the MDB power-down.
-	// Trades responsiveness to small bumps for keeping the scooter asleep through
-	// urban environmental vibration.
-	sensorArmedHibernation = SensorConfig{AnyMotion: true, Bandwidth: 0x08, Threshold: 0x20, Duration: 0x03}
+	// sensorArmedHibernation: any-motion at 31.25 Hz — hibernation-armed profile,
+	// requires 64 ms of sustained slope above ~31 mg. Programmed into the BMX just
+	// before hibernation so the wake threshold survives the MDB power-down. Stricter
+	// than the awake profile so urban environmental vibration doesn't wake the MDB.
+	sensorArmedHibernation = SensorConfig{AnyMotion: true, Bandwidth: 0x0A, Threshold: 0x08, Duration: 0x03}
 
 	// sensorLevel1: slow-motion at 15.63 Hz — confirms deliberate push/tilt (~256 ms).
 	sensorLevel1 = SensorConfig{AnyMotion: false, Bandwidth: 0x09, Threshold: 0x08, Duration: 0x03}
