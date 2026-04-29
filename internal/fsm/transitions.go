@@ -167,7 +167,7 @@ func (sm *StateMachine) getTransition(event Event) State {
 
 	case StateTriggerLevel2:
 		if _, ok := event.(Level2CheckTimerEvent); ok {
-			if sm.level2Cycles >= 4 {
+			if sm.level2Cycles >= maxLevel2Cycles {
 				return StateDisarmed
 			}
 			return StateWaitingMovement
@@ -190,7 +190,7 @@ func (sm *StateMachine) getTransition(event Event) State {
 		}
 		if _, ok := event.(BMXInterruptEvent); ok {
 			sm.level2Cycles++
-			if sm.level2Cycles >= 4 {
+			if sm.level2Cycles >= maxLevel2Cycles {
 				return StateDisarmed
 			}
 			return StateTriggerLevel2

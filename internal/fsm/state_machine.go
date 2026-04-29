@@ -85,6 +85,11 @@ func (p InterruptPin) String() string {
 	}
 }
 
+// maxLevel2Cycles caps how many TriggerLevel2/WaitingMovement cycles a single
+// alarm episode runs before bailing out into Disarmed. With ~50s per cycle
+// state, this targets roughly 10 minutes of alarm before the safety valve trips.
+const maxLevel2Cycles = 6
+
 // StateMachine implements the alarm FSM
 type StateMachine struct {
 	mu     sync.RWMutex
@@ -315,15 +320,23 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 			return
 		}
 		if sm.wakeFromHibernation {
+			// Transition into StateArmed so the BMX is properly configured for
+			// motion detection (and the nRF52 has something to wake on once we
+			// hibernate), then request hibernate. Clear the flag first so
+			// onEnterArmed doesn't start another 5-min cooldown.
 			sm.wakeFromHibernation = false
-			sm.log.Info("post-alarm cooldown elapsed, requesting re-hibernate")
+			sm.log.Info("post-alarm cooldown elapsed, arming and requesting re-hibernate")
+			sm.exitState(ctx, StateDisarmed)
+			sm.state = StateArmed
+			sm.enterState(ctx, StateArmed)
+			sm.publishCurrentStatus()
 			if err := sm.powerCommander.RequestHibernate(); err != nil {
 				sm.log.Error("failed to request hibernation", "error", err)
 			}
 			return
 		}
 		// Fall through to normal transition handling so the FSM re-arms via
-		// the StateDisarmed handler below.
+		// the StateDisarmed handler below (Disarmed → DelayArmed → Armed).
 	}
 
 	oldState := sm.state

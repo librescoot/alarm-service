@@ -31,7 +31,7 @@ init → waiting_enabled → disarmed → delay_armed (5s) → armed
                                          |                ↓
                                          |        trigger_level_1 (5s check)
                                          |                ↓ major movement
-                                         |        trigger_level_2 (50s, max 4 cycles)
+                                         |        trigger_level_2 (50s, max 6 cycles ≈ 10min)
                                          |________________|
 ```
 

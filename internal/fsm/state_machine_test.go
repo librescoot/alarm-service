@@ -360,7 +360,7 @@ func TestStateMachine_Level2ToDisarmedAfterMaxCycles(t *testing.T) {
 	ctx := context.Background()
 
 	sm.state = StateTriggerLevel2
-	sm.level2Cycles = 4
+	sm.level2Cycles = maxLevel2Cycles
 
 	sm.SendEvent(Level2CheckTimerEvent{})
 	sm.handleEvent(ctx, <-sm.events)
@@ -394,13 +394,13 @@ func TestStateMachine_WaitingMovementToDisarmedAfterMaxCycles(t *testing.T) {
 	ctx := context.Background()
 
 	sm.state = StateWaitingMovement
-	sm.level2Cycles = 3
+	sm.level2Cycles = maxLevel2Cycles - 1
 
 	sm.SendEvent(BMXInterruptEvent{})
 	sm.handleEvent(ctx, <-sm.events)
 
 	if sm.State() != StateDisarmed {
-		t.Errorf("expected StateDisarmed after 4 cycles, got %s", sm.State())
+		t.Errorf("expected StateDisarmed after max cycles, got %s", sm.State())
 	}
 }
 
@@ -1083,7 +1083,7 @@ func TestStateMachine_L2ExhaustionPreservesWakeFromHibernationInDisarmed(t *test
 	ctx := context.Background()
 
 	sm.state = StateWaitingMovement
-	sm.level2Cycles = 3
+	sm.level2Cycles = maxLevel2Cycles - 1
 	sm.alarmEnabled = true
 	sm.vehicleStandby = true
 	sm.wakeFromHibernation = true
@@ -1099,10 +1099,12 @@ func TestStateMachine_L2ExhaustionPreservesWakeFromHibernationInDisarmed(t *test
 	}
 }
 
-// After the post-alarm cooldown elapses with wakeFromHibernation set, hand the
-// system back to nRF52-watched hibernation rather than re-arming locally.
+// After the post-alarm cooldown elapses with wakeFromHibernation set, transition
+// into StateArmed (so the BMX is configured for motion detection) and then
+// request re-hibernate. Going through Armed is required: nRF52 needs the BMX
+// armed to wake the system again on motion after hibernation.
 func TestStateMachine_PostAlarmCooldownRequestsHibernateWhenWakeFlag(t *testing.T) {
-	sm, _, _, _, _, power := createTestStateMachineWithPower()
+	sm, bmx, _, _, _, power := createTestStateMachineWithPower()
 	ctx := context.Background()
 
 	sm.state = StateDisarmed
@@ -1119,8 +1121,11 @@ func TestStateMachine_PostAlarmCooldownRequestsHibernateWhenWakeFlag(t *testing.
 	if sm.wakeFromHibernation {
 		t.Error("expected wakeFromHibernation to be cleared after re-hibernate request")
 	}
-	if sm.State() != StateDisarmed {
-		t.Errorf("expected to remain in StateDisarmed pending hibernation, got %s", sm.State())
+	if sm.State() != StateArmed {
+		t.Errorf("expected StateArmed before hibernation request (so BMX is armed), got %s", sm.State())
+	}
+	if !bmx.interruptEnabled {
+		t.Error("expected BMX interrupt to be enabled before hibernation so nRF52 can wake on motion")
 	}
 }
 
