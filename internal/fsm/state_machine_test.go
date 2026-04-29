@@ -939,3 +939,111 @@ func TestStateMachine_InitToArmedSkipsDelay(t *testing.T) {
 		t.Error("expected interrupt to be enabled in armed state")
 	}
 }
+
+func TestStateMachine_ArmedUsesAwakeProfileByDefault(t *testing.T) {
+	sm, bmx, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.SendEvent(InitCompleteEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateArmed {
+		t.Fatalf("expected StateArmed, got %s", sm.State())
+	}
+	if bmx.lastConfig != sensorArmed {
+		t.Errorf("expected awake-armed profile %+v, got %+v", sensorArmed, bmx.lastConfig)
+	}
+}
+
+func TestStateMachine_HibernationImminentReprogramsArmed(t *testing.T) {
+	sm, bmx, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.SendEvent(InitCompleteEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+	if sm.State() != StateArmed {
+		t.Fatalf("expected StateArmed, got %s", sm.State())
+	}
+	if bmx.lastConfig != sensorArmed {
+		t.Fatalf("expected awake profile before imminent, got %+v", bmx.lastConfig)
+	}
+
+	sm.SendEvent(HibernationImminentEvent{Imminent: true})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateArmed {
+		t.Errorf("expected to stay in StateArmed, got %s", sm.State())
+	}
+	if !sm.hibernationImminent {
+		t.Error("expected hibernationImminent flag to be set")
+	}
+	if bmx.lastConfig != sensorArmedHibernation {
+		t.Errorf("expected hibernation-armed profile %+v, got %+v", sensorArmedHibernation, bmx.lastConfig)
+	}
+
+	sm.SendEvent(HibernationImminentEvent{Imminent: false})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.hibernationImminent {
+		t.Error("expected hibernationImminent flag to be cleared")
+	}
+	if bmx.lastConfig != sensorArmed {
+		t.Errorf("expected awake-armed profile after running, got %+v", bmx.lastConfig)
+	}
+}
+
+func TestStateMachine_HibernationImminentNoOpWhenIdempotent(t *testing.T) {
+	sm, bmx, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.SendEvent(InitCompleteEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+	bmx.lastConfig = SensorConfig{}
+
+	sm.SendEvent(HibernationImminentEvent{Imminent: false})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if (bmx.lastConfig != SensorConfig{}) {
+		t.Errorf("expected no reprogram on idempotent imminent=false, got %+v", bmx.lastConfig)
+	}
+}
+
+func TestStateMachine_HibernationImminentBeforeArmedAppliesOnEntry(t *testing.T) {
+	sm, bmx, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.alarmEnabled = false
+	sm.vehicleStandby = true
+	sm.SendEvent(InitCompleteEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+	if sm.State() != StateWaitingEnabled {
+		t.Fatalf("expected StateWaitingEnabled, got %s", sm.State())
+	}
+
+	sm.SendEvent(HibernationImminentEvent{Imminent: true})
+	sm.handleEvent(ctx, <-sm.events)
+	if !sm.hibernationImminent {
+		t.Fatal("expected hibernationImminent flag to be set in non-armed state")
+	}
+
+	sm.SendEvent(AlarmModeChangedEvent{Enabled: true})
+	sm.handleEvent(ctx, <-sm.events)
+	if sm.State() != StateDelayArmed {
+		t.Fatalf("expected StateDelayArmed, got %s", sm.State())
+	}
+	sm.SendEvent(DelayArmedTimerEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateArmed {
+		t.Fatalf("expected StateArmed, got %s", sm.State())
+	}
+	if bmx.lastConfig != sensorArmedHibernation {
+		t.Errorf("expected hibernation-armed profile on armed entry, got %+v", bmx.lastConfig)
+	}
+}

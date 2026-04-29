@@ -76,11 +76,11 @@ func (sm *StateMachine) onExitDelayArmed(ctx context.Context) {
 
 // onEnterArmed handles entry to armed state
 func (sm *StateMachine) onEnterArmed(ctx context.Context) {
-	sm.log.Info("entering armed state")
+	sm.log.Info("entering armed state", "hibernation_imminent", sm.hibernationImminent)
 
 	sm.inhibitor.Release()
 
-	sm.configureBMX(ctx, InterruptPinBoth, sensorArmed)
+	sm.configureBMX(ctx, InterruptPinBoth, sm.armedSensorConfig())
 
 	if err := sm.bmxClient.EnableInterrupt(ctx); err != nil {
 		sm.log.Error("failed to enable interrupt", "error", err)

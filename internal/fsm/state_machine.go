@@ -112,6 +112,7 @@ type StateMachine struct {
 	seatboxLockClosed    bool
 	initWakeL1           bool // L1 triggered from stale BMX latch during startup
 	wakeFromHibernation  bool // woken from hibernation by nRF52 accelerometer
+	hibernationImminent  bool // pm-service signalled hibernation is imminent or in progress
 }
 
 // SensorConfig mirrors hwbmx.SensorConfig at the FSM layer to avoid an import cycle.
@@ -127,8 +128,17 @@ var (
 	// sensorIdle: low-BW slow-motion used in init/delay/disarmed states (interrupt disabled).
 	sensorIdle = SensorConfig{AnyMotion: false, Bandwidth: 0x08, Threshold: 0x14, Duration: 0x02}
 
-	// sensorArmed: any-motion at 31.25 Hz — catches dog bumps and brief contact (~32 ms).
-	sensorArmed = SensorConfig{AnyMotion: true, Bandwidth: 0x0A, Threshold: 0x04, Duration: 0x01}
+	// sensorArmed: any-motion at 31.25 Hz — awake-armed profile, requires 64 ms of
+	// sustained slope above ~31 mg. Catches contact (hand, kid, dog leaning) while
+	// rejecting brief vibration spikes from passing trucks/trams.
+	sensorArmed = SensorConfig{AnyMotion: true, Bandwidth: 0x0A, Threshold: 0x08, Duration: 0x03}
+
+	// sensorArmedHibernation: any-motion at 7.81 Hz — hibernation-armed profile,
+	// requires 256 ms of sustained slope above ~125 mg. Programmed into the BMX
+	// just before hibernation so the wake threshold survives the MDB power-down.
+	// Trades responsiveness to small bumps for keeping the scooter asleep through
+	// urban environmental vibration.
+	sensorArmedHibernation = SensorConfig{AnyMotion: true, Bandwidth: 0x08, Threshold: 0x20, Duration: 0x03}
 
 	// sensorLevel1: slow-motion at 15.63 Hz — confirms deliberate push/tilt (~256 ms).
 	sensorLevel1 = SensorConfig{AnyMotion: false, Bandwidth: 0x09, Threshold: 0x08, Duration: 0x03}
@@ -278,6 +288,18 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 		return
 	}
 
+	if e, ok := event.(HibernationImminentEvent); ok {
+		if sm.hibernationImminent == e.Imminent {
+			return
+		}
+		sm.hibernationImminent = e.Imminent
+		sm.log.Info("hibernation-imminent flag updated", "imminent", e.Imminent)
+		if sm.state == StateArmed {
+			sm.reprogramArmed(ctx)
+		}
+		return
+	}
+
 	if _, ok := event.(HibernateAfterWakeTimerEvent); ok {
 		if sm.state == StateArmed && sm.wakeFromHibernation && sm.vehicleStandby {
 			sm.wakeFromHibernation = false
@@ -345,6 +367,34 @@ func (sm *StateMachine) stateToStatus(state State) string {
 		return "seatbox-access"
 	default:
 		return "unknown"
+	}
+}
+
+// armedSensorConfig returns the sensor profile to use in the armed state, based on
+// whether pm-service has signalled an imminent hibernation transition.
+func (sm *StateMachine) armedSensorConfig() SensorConfig {
+	if sm.hibernationImminent {
+		return sensorArmedHibernation
+	}
+	return sensorArmed
+}
+
+// reprogramArmed reconfigures the BMX in-place while staying in the armed state.
+// Used when the hibernation-imminent flag flips so the registers going into (or
+// returning from) hibernation reflect the right profile without an FSM transition.
+func (sm *StateMachine) reprogramArmed(ctx context.Context) {
+	cfg := sm.armedSensorConfig()
+	sm.log.Info("reprogramming armed BMX profile",
+		"hibernation", sm.hibernationImminent,
+		"bw", cfg.Bandwidth,
+		"threshold", cfg.Threshold,
+		"duration", cfg.Duration)
+
+	if err := sm.bmxClient.ConfigureSensor(ctx, cfg); err != nil {
+		sm.log.Error("failed to reprogram sensor", "error", err)
+	}
+	if err := sm.bmxClient.EnableInterrupt(ctx); err != nil {
+		sm.log.Error("failed to re-enable interrupt", "error", err)
 	}
 }
 

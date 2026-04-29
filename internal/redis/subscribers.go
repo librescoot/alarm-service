@@ -13,6 +13,7 @@ import (
 type Subscriber struct {
 	vehicleWatcher          *ipc.HashWatcher
 	settingsWatcher         *ipc.HashWatcher
+	powerManagerWatcher     *ipc.HashWatcher
 	bmxWatcher              *ipc.Subscription[string]
 	ipc                     *ipc.Client
 	log                     *slog.Logger
@@ -26,6 +27,7 @@ func NewSubscriber(client *Client, sm *fsm.StateMachine, log *slog.Logger) *Subs
 	s := &Subscriber{
 		vehicleWatcher:        client.ipc.NewHashWatcher("vehicle"),
 		settingsWatcher:       client.ipc.NewHashWatcher("settings"),
+		powerManagerWatcher:   client.ipc.NewHashWatcher("power-manager"),
 		ipc:                   client.ipc,
 		log:                   log,
 		sm:                    sm,
@@ -34,8 +36,25 @@ func NewSubscriber(client *Client, sm *fsm.StateMachine, log *slog.Logger) *Subs
 
 	s.setupVehicleWatcher()
 	s.setupSettingsWatcher()
+	s.setupPowerManagerWatcher()
 
 	return s
+}
+
+// isHibernatingImminentState reports whether a power-manager state value indicates
+// that hibernation is imminent or in progress. Suspend is intentionally excluded —
+// the BMX hibernation profile is only meant to gate full power-down events.
+func isHibernatingImminentState(state string) bool {
+	switch state {
+	case "hibernating-imminent",
+		"hibernating-manual-imminent",
+		"hibernating-timer-imminent",
+		"hibernating",
+		"hibernating-manual",
+		"hibernating-timer":
+		return true
+	}
+	return false
 }
 
 // setupVehicleWatcher registers handlers for vehicle state changes
@@ -154,6 +173,18 @@ func (s *Subscriber) setupSettingsWatcher() {
 	})
 }
 
+// setupPowerManagerWatcher reacts to pm-service publishing its current power-manager
+// state. The hibernation-imminent phase (and the hibernation phase itself, in case we
+// race the transition) flips the alarm into the stricter armed-state profile.
+func (s *Subscriber) setupPowerManagerWatcher() {
+	s.powerManagerWatcher.OnField("state", func(stateStr string) error {
+		imminent := isHibernatingImminentState(stateStr)
+		s.log.Debug("power-manager state changed", "state", stateStr, "hibernation_imminent", imminent)
+		s.sm.SendEvent(fsm.HibernationImminentEvent{Imminent: imminent})
+		return nil
+	})
+}
+
 // Start starts all watchers with initial state sync and signals the FSM to
 // leave StateInit. StartWithSync delivers current field values via OnField
 // callbacks before returning, so the FSM receives AlarmModeChangedEvent and
@@ -167,6 +198,10 @@ func (s *Subscriber) Start() error {
 
 	if err := s.settingsWatcher.StartWithSync(); err != nil {
 		return fmt.Errorf("failed to start settings watcher: %w", err)
+	}
+
+	if err := s.powerManagerWatcher.StartWithSync(); err != nil {
+		return fmt.Errorf("failed to start power-manager watcher: %w", err)
 	}
 
 	s.sm.SendEvent(fsm.InitCompleteEvent{})
@@ -192,6 +227,7 @@ func (s *Subscriber) Start() error {
 func (s *Subscriber) Stop() {
 	s.vehicleWatcher.Stop()
 	s.settingsWatcher.Stop()
+	s.powerManagerWatcher.Stop()
 	if s.bmxWatcher != nil {
 		s.bmxWatcher.Unsubscribe()
 	}

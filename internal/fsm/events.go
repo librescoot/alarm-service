@@ -102,6 +102,16 @@ type HibernateAfterWakeTimerEvent struct{}
 
 func (e HibernateAfterWakeTimerEvent) Type() string { return "hibernate_after_wake_timer" }
 
+// HibernationImminentEvent signals that pm-service is entering or leaving a
+// hibernation-imminent phase. When true, the armed-state BMX profile switches
+// to the stricter hibernation profile so the registers programmed across the
+// MDB power-down reject urban environmental vibration.
+type HibernationImminentEvent struct {
+	Imminent bool
+}
+
+func (e HibernationImminentEvent) Type() string { return "hibernation_imminent" }
+
 // ManualTriggerEvent signals manual alarm trigger
 type ManualTriggerEvent struct {
 	Duration int
