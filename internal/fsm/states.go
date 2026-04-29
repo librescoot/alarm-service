@@ -44,7 +44,24 @@ func (sm *StateMachine) onEnterDisarmed(ctx context.Context) {
 	sm.configureBMX(ctx, InterruptPinNone, sensorIdle)
 	sm.inhibitor.Release()
 	sm.level2Cycles = 0
-	sm.wakeFromHibernation = false
+
+	// If we got here with the vehicle still in stand-by, this is the L2-exhaustion
+	// path: the alarm gave up after a long blare. Start a quiet window before
+	// re-arming (or handing back to nRF52 hibernation), so a stuck/false trigger
+	// can't blare all night and a thief can't simply wait it out.
+	if sm.vehicleStandby && sm.alarmEnabled {
+		sm.log.Info("post-alarm cooldown started", "duration", "5m", "wake_from_hibernation", sm.wakeFromHibernation)
+		sm.startTimer("post_alarm_cooldown", 5*time.Minute, func() {
+			sm.SendEvent(PostAlarmCooldownTimerEvent{})
+		})
+	} else {
+		sm.wakeFromHibernation = false
+	}
+}
+
+// onExitDisarmed handles exit from disarmed state
+func (sm *StateMachine) onExitDisarmed(_ context.Context) {
+	sm.stopTimer("post_alarm_cooldown")
 }
 
 // onEnterDelayArmed handles entry to delay_armed state

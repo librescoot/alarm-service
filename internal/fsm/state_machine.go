@@ -310,6 +310,22 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 		return
 	}
 
+	if _, ok := event.(PostAlarmCooldownTimerEvent); ok {
+		if sm.state != StateDisarmed || !sm.alarmEnabled || !sm.vehicleStandby {
+			return
+		}
+		if sm.wakeFromHibernation {
+			sm.wakeFromHibernation = false
+			sm.log.Info("post-alarm cooldown elapsed, requesting re-hibernate")
+			if err := sm.powerCommander.RequestHibernate(); err != nil {
+				sm.log.Error("failed to request hibernation", "error", err)
+			}
+			return
+		}
+		// Fall through to normal transition handling so the FSM re-arms via
+		// the StateDisarmed handler below.
+	}
+
 	oldState := sm.state
 	sm.log.Debug("handling event",
 		"event", event.Type(),

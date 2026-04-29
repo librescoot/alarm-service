@@ -102,6 +102,13 @@ type HibernateAfterWakeTimerEvent struct{}
 
 func (e HibernateAfterWakeTimerEvent) Type() string { return "hibernate_after_wake_timer" }
 
+// PostAlarmCooldownTimerEvent signals the quiet window after L2 exhaustion has elapsed.
+// Used to either re-arm or hand back to nRF52 hibernation, denying a "wait it out" attack
+// without letting a stuck/false alarm blare indefinitely.
+type PostAlarmCooldownTimerEvent struct{}
+
+func (e PostAlarmCooldownTimerEvent) Type() string { return "post_alarm_cooldown_timer" }
+
 // HibernationImminentEvent signals that pm-service is entering or leaving a
 // hibernation-imminent phase. When true, the armed-state BMX profile switches
 // to the stricter hibernation profile so the registers programmed across the

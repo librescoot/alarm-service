@@ -109,6 +109,11 @@ func (m *mockPowerCommander) RequestHibernate() error {
 }
 
 func createTestStateMachine() (*StateMachine, *mockBMXClient, *mockStatusPublisher, *mockSuspendInhibitor, *mockAlarmController) {
+	sm, bmx, pub, inh, alarm, _ := createTestStateMachineWithPower()
+	return sm, bmx, pub, inh, alarm
+}
+
+func createTestStateMachineWithPower() (*StateMachine, *mockBMXClient, *mockStatusPublisher, *mockSuspendInhibitor, *mockAlarmController, *mockPowerCommander) {
 	bmx := &mockBMXClient{}
 	pub := &mockStatusPublisher{}
 	inh := &mockSuspendInhibitor{}
@@ -119,7 +124,7 @@ func createTestStateMachine() (*StateMachine, *mockBMXClient, *mockStatusPublish
 	}))
 
 	sm := New(bmx, pub, inh, alarm, power, 10, log)
-	return sm, bmx, pub, inh, alarm
+	return sm, bmx, pub, inh, alarm, power
 }
 
 func TestStateMachine_InitialState(t *testing.T) {
@@ -1045,5 +1050,120 @@ func TestStateMachine_HibernationImminentBeforeArmedAppliesOnEntry(t *testing.T)
 	}
 	if bmx.lastConfig != sensorArmedHibernation {
 		t.Errorf("expected hibernation-armed profile on armed entry, got %+v", bmx.lastConfig)
+	}
+}
+
+// User-intervention disarm (vehicle leaves stand-by) must clear
+// wakeFromHibernation — the wake intent no longer applies.
+func TestStateMachine_UserDisarmClearsWakeFromHibernation(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.wakeFromHibernation = true
+
+	sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateParked})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateDisarmed {
+		t.Fatalf("expected StateDisarmed, got %s", sm.State())
+	}
+	if sm.wakeFromHibernation {
+		t.Error("expected wakeFromHibernation to be cleared on user-intervention disarm")
+	}
+}
+
+// L2 exhaustion lands in Disarmed (preserving the "shut up" safety valve), but
+// with the vehicle still in stand-by the FSM keeps wakeFromHibernation around
+// so the post-alarm cooldown can decide between re-hibernate and re-arm.
+func TestStateMachine_L2ExhaustionPreservesWakeFromHibernationInDisarmed(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateWaitingMovement
+	sm.level2Cycles = 3
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.wakeFromHibernation = true
+
+	sm.SendEvent(BMXInterruptEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateDisarmed {
+		t.Fatalf("expected StateDisarmed after L2 exhaustion, got %s", sm.State())
+	}
+	if !sm.wakeFromHibernation {
+		t.Error("expected wakeFromHibernation to survive Disarmed entry when vehicle still in stand-by")
+	}
+}
+
+// After the post-alarm cooldown elapses with wakeFromHibernation set, hand the
+// system back to nRF52-watched hibernation rather than re-arming locally.
+func TestStateMachine_PostAlarmCooldownRequestsHibernateWhenWakeFlag(t *testing.T) {
+	sm, _, _, _, _, power := createTestStateMachineWithPower()
+	ctx := context.Background()
+
+	sm.state = StateDisarmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.wakeFromHibernation = true
+
+	sm.SendEvent(PostAlarmCooldownTimerEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if power.hibernateCalled != 1 {
+		t.Errorf("expected RequestHibernate to be called once, got %d", power.hibernateCalled)
+	}
+	if sm.wakeFromHibernation {
+		t.Error("expected wakeFromHibernation to be cleared after re-hibernate request")
+	}
+	if sm.State() != StateDisarmed {
+		t.Errorf("expected to remain in StateDisarmed pending hibernation, got %s", sm.State())
+	}
+}
+
+// After the post-alarm cooldown elapses without a wake-from-hibernation flag,
+// re-arm normally so a thief can't simply wait out the silence.
+func TestStateMachine_PostAlarmCooldownRearmsWhenNoWakeFlag(t *testing.T) {
+	sm, _, _, _, _, power := createTestStateMachineWithPower()
+	ctx := context.Background()
+
+	sm.state = StateDisarmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.wakeFromHibernation = false
+
+	sm.SendEvent(PostAlarmCooldownTimerEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if power.hibernateCalled != 0 {
+		t.Errorf("expected RequestHibernate not to be called, got %d", power.hibernateCalled)
+	}
+	if sm.State() != StateDelayArmed {
+		t.Errorf("expected StateDelayArmed after cooldown re-arm, got %s", sm.State())
+	}
+}
+
+// User intervention during the post-alarm cooldown (alarm disabled) must short-circuit
+// the cooldown — no hibernate, no re-arm.
+func TestStateMachine_PostAlarmCooldownIgnoredWhenAlarmDisabled(t *testing.T) {
+	sm, _, _, _, _, power := createTestStateMachineWithPower()
+	ctx := context.Background()
+
+	sm.state = StateDisarmed
+	sm.alarmEnabled = false
+	sm.vehicleStandby = true
+	sm.wakeFromHibernation = true
+
+	sm.SendEvent(PostAlarmCooldownTimerEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if power.hibernateCalled != 0 {
+		t.Errorf("expected RequestHibernate not to be called when alarm disabled, got %d", power.hibernateCalled)
+	}
+	if sm.State() != StateDisarmed {
+		t.Errorf("expected to remain in StateDisarmed, got %s", sm.State())
 	}
 }

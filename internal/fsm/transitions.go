@@ -64,6 +64,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(RuntimeArmEvent); ok && sm.alarmEnabled {
 			return StateDelayArmed
 		}
+		if _, ok := event.(PostAlarmCooldownTimerEvent); ok && sm.alarmEnabled && sm.vehicleStandby {
+			return StateDelayArmed
+		}
 
 	case StateDelayArmed:
 		if _, ok := event.(DelayArmedTimerEvent); ok {
@@ -254,6 +257,8 @@ func (sm *StateMachine) enterState(ctx context.Context, state State) {
 // exitState handles state exit actions
 func (sm *StateMachine) exitState(ctx context.Context, state State) {
 	switch state {
+	case StateDisarmed:
+		sm.onExitDisarmed(ctx)
 	case StateDelayArmed:
 		sm.onExitDelayArmed(ctx)
 	case StateArmed:
