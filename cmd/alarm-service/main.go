@@ -18,7 +18,7 @@ func main() {
 	i2cBus := flag.String("i2c-bus", "/dev/i2c-3", "I2C bus device path")
 	redisAddr := flag.String("redis", "localhost:6379", "Redis address")
 	logLevel := flag.String("log-level", "info", "Log level: debug, info, warn, error")
-	alarmEnabled := flag.Bool("alarm-enabled", false, "Enable alarm system (writes to Redis on startup)")
+	alarmEnabled := flag.Bool("alarm-enabled", true, "Enable alarm system (writes to Redis on startup)")
 	alarmDuration := flag.Int("alarm-duration", 10, "Alarm duration in seconds")
 	hornEnabled := flag.Bool("horn-enabled", false, "Enable horn during alarm")
 	seatboxTrigger := flag.Bool("seatbox-trigger", true, "Trigger alarm on unauthorized seatbox opening")
