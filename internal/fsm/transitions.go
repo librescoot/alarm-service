@@ -29,11 +29,13 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(InitCompleteEvent); ok {
 			if sm.alarmEnabled {
 				if sm.vehicleStandby {
-					// Check if accelerometer has a latched interrupt from before boot
-					// (e.g. motion that woke the system from hibernation)
-					if motionDetected, err := sm.bmxClient.CheckInterruptStatus(sm.ctx); err == nil && motionDetected {
-						sm.log.Info("motion detected before startup, triggering L1")
-						sm.initWakeL1 = true
+					// If motion-service stamped wake-hibernation onto our event
+					// stream during init (either via the durable motion.wake-cause
+					// hash field or the live motion:interrupt pub/sub), drop
+					// straight to L1 wait — the motion edge that fired the latch
+					// was the wake event, treat it as a real motion trigger.
+					if sm.wakeFromHibernation {
+						sm.log.Info("init wake-from-hibernation, triggering L1")
 						return StateTriggerLevel1Wait
 					}
 					return StateArmed

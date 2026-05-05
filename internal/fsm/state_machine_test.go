@@ -9,41 +9,14 @@ import (
 )
 
 // Mock implementations for testing
-type mockBMXClient struct {
-	lastConfig       SensorConfig
-	interruptPin     InterruptPin
-	interruptEnabled bool
-	resetCalled      int
-	interruptStatus  bool
+type mockMotionRPC struct {
+	prepareCalls int
+	prepareErr   error
 }
 
-func (m *mockBMXClient) ConfigureSensor(ctx context.Context, cfg SensorConfig) error {
-	m.lastConfig = cfg
-	return nil
-}
-
-func (m *mockBMXClient) SetInterruptPin(ctx context.Context, pin InterruptPin) error {
-	m.interruptPin = pin
-	return nil
-}
-
-func (m *mockBMXClient) SoftReset(ctx context.Context) error {
-	m.resetCalled++
-	return nil
-}
-
-func (m *mockBMXClient) EnableInterrupt(ctx context.Context) error {
-	m.interruptEnabled = true
-	return nil
-}
-
-func (m *mockBMXClient) DisableInterrupt(ctx context.Context) error {
-	m.interruptEnabled = false
-	return nil
-}
-
-func (m *mockBMXClient) CheckInterruptStatus(ctx context.Context) (bool, error) {
-	return m.interruptStatus, nil
+func (m *mockMotionRPC) PrepareHibernation(ctx context.Context) error {
+	m.prepareCalls++
+	return m.prepareErr
 }
 
 type mockStatusPublisher struct {
@@ -108,13 +81,13 @@ func (m *mockPowerCommander) RequestHibernate() error {
 	return nil
 }
 
-func createTestStateMachine() (*StateMachine, *mockBMXClient, *mockStatusPublisher, *mockSuspendInhibitor, *mockAlarmController) {
-	sm, bmx, pub, inh, alarm, _ := createTestStateMachineWithPower()
-	return sm, bmx, pub, inh, alarm
+func createTestStateMachine() (*StateMachine, *mockMotionRPC, *mockStatusPublisher, *mockSuspendInhibitor, *mockAlarmController) {
+	sm, motion, pub, inh, alarm, _ := createTestStateMachineWithPower()
+	return sm, motion, pub, inh, alarm
 }
 
-func createTestStateMachineWithPower() (*StateMachine, *mockBMXClient, *mockStatusPublisher, *mockSuspendInhibitor, *mockAlarmController, *mockPowerCommander) {
-	bmx := &mockBMXClient{}
+func createTestStateMachineWithPower() (*StateMachine, *mockMotionRPC, *mockStatusPublisher, *mockSuspendInhibitor, *mockAlarmController, *mockPowerCommander) {
+	motion := &mockMotionRPC{}
 	pub := &mockStatusPublisher{}
 	inh := &mockSuspendInhibitor{}
 	alarm := &mockAlarmController{}
@@ -123,8 +96,8 @@ func createTestStateMachineWithPower() (*StateMachine, *mockBMXClient, *mockStat
 		Level: slog.LevelError,
 	}))
 
-	sm := New(bmx, pub, inh, alarm, power, 10, log)
-	return sm, bmx, pub, inh, alarm, power
+	sm := New(motion, pub, inh, alarm, power, 10, log)
+	return sm, motion, pub, inh, alarm, power
 }
 
 func TestStateMachine_InitialState(t *testing.T) {
@@ -136,7 +109,7 @@ func TestStateMachine_InitialState(t *testing.T) {
 }
 
 func TestStateMachine_InitToWaitingEnabled(t *testing.T) {
-	sm, bmx, pub, _, _ := createTestStateMachine()
+	sm, _, pub, _, _ := createTestStateMachine()
 	ctx := context.Background()
 
 	sm.alarmEnabled = false
@@ -149,10 +122,6 @@ func TestStateMachine_InitToWaitingEnabled(t *testing.T) {
 
 	if pub.lastStatus != "disabled" {
 		t.Errorf("expected status 'disabled', got %s", pub.lastStatus)
-	}
-
-	if bmx.interruptEnabled {
-		t.Error("expected interrupt to be disabled in waiting_enabled state")
 	}
 }
 
@@ -175,7 +144,7 @@ func TestStateMachine_InitToDisarmed(t *testing.T) {
 }
 
 func TestStateMachine_InitToArmedWhenStandby(t *testing.T) {
-	sm, bmx, pub, _, _ := createTestStateMachine()
+	sm, _, pub, _, _ := createTestStateMachine()
 	ctx := context.Background()
 
 	sm.alarmEnabled = true
@@ -189,10 +158,6 @@ func TestStateMachine_InitToArmedWhenStandby(t *testing.T) {
 
 	if pub.lastStatus != "armed" {
 		t.Errorf("expected status 'armed', got %s", pub.lastStatus)
-	}
-
-	if !bmx.interruptEnabled {
-		t.Error("expected interrupt to be enabled in armed state")
 	}
 }
 
@@ -221,7 +186,7 @@ func TestStateMachine_DisarmedToDelayArmed(t *testing.T) {
 }
 
 func TestStateMachine_DelayArmedToArmed(t *testing.T) {
-	sm, bmx, _, inh, _ := createTestStateMachine()
+	sm, _, _, inh, _ := createTestStateMachine()
 	ctx := context.Background()
 
 	sm.state = StateDelayArmed
@@ -239,18 +204,10 @@ func TestStateMachine_DelayArmedToArmed(t *testing.T) {
 	if inh.acquired {
 		t.Error("expected suspend inhibitor to be released in armed state")
 	}
-
-	if !bmx.lastConfig.AnyMotion {
-		t.Error("expected any-motion mode in armed state")
-	}
-
-	if !bmx.interruptEnabled {
-		t.Error("expected interrupt to be enabled in armed state")
-	}
 }
 
 func TestStateMachine_ArmedToTriggerLevel1Wait(t *testing.T) {
-	sm, bmx, _, inh, alarm := createTestStateMachine()
+	sm, _, _, inh, alarm := createTestStateMachine()
 	ctx := context.Background()
 
 	sm.state = StateArmed
@@ -268,17 +225,13 @@ func TestStateMachine_ArmedToTriggerLevel1Wait(t *testing.T) {
 		t.Error("expected suspend inhibitor to be acquired in level 1 wait")
 	}
 
-	if bmx.resetCalled == 0 {
-		t.Error("expected BMX to be reset on entering level 1 wait")
-	}
-
 	if alarm.blinkCalled != 1 {
 		t.Errorf("expected hazards to blink once, got %d blinks", alarm.blinkCalled)
 	}
 }
 
 func TestStateMachine_Level1WaitToLevel1(t *testing.T) {
-	sm, bmx, _, _, _ := createTestStateMachine()
+	sm, _, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
 
 	sm.state = StateTriggerLevel1Wait
@@ -288,14 +241,6 @@ func TestStateMachine_Level1WaitToLevel1(t *testing.T) {
 
 	if sm.State() != StateTriggerLevel1 {
 		t.Errorf("expected StateTriggerLevel1, got %s", sm.State())
-	}
-
-	if bmx.lastConfig.AnyMotion {
-		t.Error("expected slow-motion mode in level 1 state")
-	}
-
-	if !bmx.interruptEnabled {
-		t.Error("expected interrupt to be enabled in level 1")
 	}
 }
 
@@ -589,37 +534,6 @@ func TestStateMachine_AlarmStopsOnLevel2Exit(t *testing.T) {
 	}
 }
 
-func TestStateMachine_BMXConfigurationInStates(t *testing.T) {
-	tests := []struct {
-		state           State
-		expectedPin     InterruptPin
-		expectedAnyMot  bool
-	}{
-		{StateInit, InterruptPinINT2, false},
-		{StateWaitingEnabled, InterruptPinINT2, false},
-		{StateDisarmed, InterruptPinNone, false},
-		{StateDelayArmed, InterruptPinINT2, false},
-		{StateArmed, InterruptPinBoth, true},
-		{StateTriggerLevel1, InterruptPinBoth, false},
-	}
-
-	for _, tt := range tests {
-		sm, bmx, _, _, _ := createTestStateMachine()
-		ctx := context.Background()
-
-		sm.state = tt.state
-		sm.enterState(ctx, tt.state)
-
-		if bmx.interruptPin != tt.expectedPin {
-			t.Errorf("state %s: expected pin %s, got %s", tt.state, tt.expectedPin, bmx.interruptPin)
-		}
-
-		if bmx.lastConfig.AnyMotion != tt.expectedAnyMot {
-			t.Errorf("state %s: expected AnyMotion=%v, got %v", tt.state, tt.expectedAnyMot, bmx.lastConfig.AnyMotion)
-		}
-	}
-}
-
 func TestStateMachine_UnauthorizedSeatboxFromArmed(t *testing.T) {
 	sm, _, _, _, alarm := createTestStateMachine()
 	ctx := context.Background()
@@ -705,7 +619,7 @@ func TestStateMachine_UnauthorizedSeatboxFromLevel1(t *testing.T) {
 }
 
 func TestStateMachine_AuthorizedSeatboxAccess(t *testing.T) {
-	sm, bmx, _, inh, _ := createTestStateMachine()
+	sm, _, _, inh, _ := createTestStateMachine()
 	ctx := context.Background()
 
 	sm.state = StateArmed
@@ -721,10 +635,6 @@ func TestStateMachine_AuthorizedSeatboxAccess(t *testing.T) {
 
 	if !inh.acquired {
 		t.Error("expected suspend inhibitor to be acquired in seatbox access")
-	}
-
-	if bmx.interruptEnabled {
-		t.Error("expected interrupt to be disabled during seatbox access")
 	}
 
 	if sm.preSeatboxState != StateArmed {
@@ -924,7 +834,7 @@ func TestStateMachine_ShuttingDownDoesNotDisarm(t *testing.T) {
 }
 
 func TestStateMachine_InitToArmedSkipsDelay(t *testing.T) {
-	sm, bmx, pub, _, _ := createTestStateMachine()
+	sm, _, pub, _, _ := createTestStateMachine()
 	ctx := context.Background()
 
 	sm.alarmEnabled = true
@@ -939,14 +849,10 @@ func TestStateMachine_InitToArmedSkipsDelay(t *testing.T) {
 	if pub.lastStatus != "armed" {
 		t.Errorf("expected status 'armed', got %s", pub.lastStatus)
 	}
-
-	if !bmx.interruptEnabled {
-		t.Error("expected interrupt to be enabled in armed state")
-	}
 }
 
 func TestStateMachine_ArmedUsesAwakeProfileByDefault(t *testing.T) {
-	sm, bmx, _, _, _ := createTestStateMachine()
+	sm, motion, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
 
 	sm.alarmEnabled = true
@@ -957,13 +863,13 @@ func TestStateMachine_ArmedUsesAwakeProfileByDefault(t *testing.T) {
 	if sm.State() != StateArmed {
 		t.Fatalf("expected StateArmed, got %s", sm.State())
 	}
-	if bmx.lastConfig != sensorArmed {
-		t.Errorf("expected awake-armed profile %+v, got %+v", sensorArmed, bmx.lastConfig)
+	if motion.prepareCalls != 0 {
+		t.Errorf("expected no PrepareHibernation calls without imminent flag, got %d", motion.prepareCalls)
 	}
 }
 
 func TestStateMachine_HibernationImminentReprogramsArmed(t *testing.T) {
-	sm, bmx, _, _, _ := createTestStateMachine()
+	sm, motion, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
 
 	sm.alarmEnabled = true
@@ -973,8 +879,8 @@ func TestStateMachine_HibernationImminentReprogramsArmed(t *testing.T) {
 	if sm.State() != StateArmed {
 		t.Fatalf("expected StateArmed, got %s", sm.State())
 	}
-	if bmx.lastConfig != sensorArmed {
-		t.Fatalf("expected awake profile before imminent, got %+v", bmx.lastConfig)
+	if motion.prepareCalls != 0 {
+		t.Fatalf("expected no PrepareHibernation calls before imminent, got %d", motion.prepareCalls)
 	}
 
 	sm.SendEvent(HibernationImminentEvent{Imminent: true})
@@ -986,8 +892,8 @@ func TestStateMachine_HibernationImminentReprogramsArmed(t *testing.T) {
 	if !sm.hibernationImminent {
 		t.Error("expected hibernationImminent flag to be set")
 	}
-	if bmx.lastConfig != sensorArmedHibernation {
-		t.Errorf("expected hibernation-armed profile %+v, got %+v", sensorArmedHibernation, bmx.lastConfig)
+	if motion.prepareCalls != 1 {
+		t.Errorf("expected PrepareHibernation to be called once on imminent=true, got %d", motion.prepareCalls)
 	}
 
 	sm.SendEvent(HibernationImminentEvent{Imminent: false})
@@ -996,31 +902,28 @@ func TestStateMachine_HibernationImminentReprogramsArmed(t *testing.T) {
 	if sm.hibernationImminent {
 		t.Error("expected hibernationImminent flag to be cleared")
 	}
-	if bmx.lastConfig != sensorArmed {
-		t.Errorf("expected awake-armed profile after running, got %+v", bmx.lastConfig)
-	}
 }
 
 func TestStateMachine_HibernationImminentNoOpWhenIdempotent(t *testing.T) {
-	sm, bmx, _, _, _ := createTestStateMachine()
+	sm, motion, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
 
 	sm.alarmEnabled = true
 	sm.vehicleStandby = true
 	sm.SendEvent(InitCompleteEvent{})
 	sm.handleEvent(ctx, <-sm.events)
-	bmx.lastConfig = SensorConfig{}
+	motion.prepareCalls = 0
 
 	sm.SendEvent(HibernationImminentEvent{Imminent: false})
 	sm.handleEvent(ctx, <-sm.events)
 
-	if (bmx.lastConfig != SensorConfig{}) {
-		t.Errorf("expected no reprogram on idempotent imminent=false, got %+v", bmx.lastConfig)
+	if motion.prepareCalls != 0 {
+		t.Errorf("expected no PrepareHibernation call on idempotent imminent=false, got %d", motion.prepareCalls)
 	}
 }
 
 func TestStateMachine_HibernationImminentBeforeArmedAppliesOnEntry(t *testing.T) {
-	sm, bmx, _, _, _ := createTestStateMachine()
+	sm, motion, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
 
 	sm.alarmEnabled = false
@@ -1036,6 +939,7 @@ func TestStateMachine_HibernationImminentBeforeArmedAppliesOnEntry(t *testing.T)
 	if !sm.hibernationImminent {
 		t.Fatal("expected hibernationImminent flag to be set in non-armed state")
 	}
+	prepareBefore := motion.prepareCalls
 
 	sm.SendEvent(AlarmModeChangedEvent{Enabled: true})
 	sm.handleEvent(ctx, <-sm.events)
@@ -1048,8 +952,8 @@ func TestStateMachine_HibernationImminentBeforeArmedAppliesOnEntry(t *testing.T)
 	if sm.State() != StateArmed {
 		t.Fatalf("expected StateArmed, got %s", sm.State())
 	}
-	if bmx.lastConfig != sensorArmedHibernation {
-		t.Errorf("expected hibernation-armed profile on armed entry, got %+v", bmx.lastConfig)
+	if motion.prepareCalls != prepareBefore+1 {
+		t.Errorf("expected PrepareHibernation to be called on armed entry with hibernationImminent=true, got %d (was %d)", motion.prepareCalls, prepareBefore)
 	}
 }
 
@@ -1104,7 +1008,7 @@ func TestStateMachine_L2ExhaustionPreservesWakeFromHibernationInDisarmed(t *test
 // request re-hibernate. Going through Armed is required: nRF52 needs the BMX
 // armed to wake the system again on motion after hibernation.
 func TestStateMachine_PostAlarmCooldownRequestsHibernateWhenWakeFlag(t *testing.T) {
-	sm, bmx, _, _, _, power := createTestStateMachineWithPower()
+	sm, _, _, _, _, power := createTestStateMachineWithPower()
 	ctx := context.Background()
 
 	sm.state = StateDisarmed
@@ -1122,10 +1026,7 @@ func TestStateMachine_PostAlarmCooldownRequestsHibernateWhenWakeFlag(t *testing.
 		t.Error("expected wakeFromHibernation to be cleared after re-hibernate request")
 	}
 	if sm.State() != StateArmed {
-		t.Errorf("expected StateArmed before hibernation request (so BMX is armed), got %s", sm.State())
-	}
-	if !bmx.interruptEnabled {
-		t.Error("expected BMX interrupt to be enabled before hibernation so nRF52 can wake on motion")
+		t.Errorf("expected StateArmed before hibernation request (so motion-service arms BMX), got %s", sm.State())
 	}
 }
 
