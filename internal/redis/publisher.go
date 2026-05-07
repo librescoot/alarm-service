@@ -28,14 +28,6 @@ func (p *Publisher) PublishStatus(status string) error {
 	return nil
 }
 
-// PublishInterrupt publishes a BMX interrupt event to channel
-func (p *Publisher) PublishInterrupt(payload string) error {
-	if _, err := p.ipc.Publish("bmx:interrupt", payload); err != nil {
-		return fmt.Errorf("failed to publish bmx interrupt: %w", err)
-	}
-	return nil
-}
-
 // RequestHibernate sends a hibernate-manual command to pm-service
 func (p *Publisher) RequestHibernate() error {
 	if _, err := p.ipc.LPush("scooter:power", "hibernate-manual"); err != nil {

@@ -60,31 +60,6 @@ func (s Sensitivity) String() string {
 	}
 }
 
-// InterruptPin represents BMX interrupt pin
-type InterruptPin int
-
-const (
-	InterruptPinNone InterruptPin = iota
-	InterruptPinINT1
-	InterruptPinINT2
-	InterruptPinBoth
-)
-
-func (p InterruptPin) String() string {
-	switch p {
-	case InterruptPinNone:
-		return "none"
-	case InterruptPinINT1:
-		return "int1"
-	case InterruptPinINT2:
-		return "int2"
-	case InterruptPinBoth:
-		return "both"
-	default:
-		return "unknown"
-	}
-}
-
 // maxLevel2Cycles caps how many TriggerLevel2/WaitingMovement cycles a single
 // alarm episode runs before bailing out into Disarmed. With ~50s per cycle
 // state, this targets roughly 10 minutes of alarm before the safety valve trips.
@@ -98,67 +73,33 @@ type StateMachine struct {
 	log    *slog.Logger
 	ctx    context.Context
 
-	bmxClient        BMXClient
-	publisher        StatusPublisher
-	inhibitor        SuspendInhibitor
-	alarmController  AlarmController
-	powerCommander   PowerCommander
+	motion          MotionRPC
+	publisher       StatusPublisher
+	inhibitor       SuspendInhibitor
+	alarmController AlarmController
+	powerCommander  PowerCommander
 
-	timers               map[string]*time.Timer
-	alarmEnabled         bool
-	vehicleStandby       bool
-	level2Cycles         int
-	requestDisarm        bool
-	alarmDuration        int
-	hairTriggerEnabled   bool
-	hairTriggerDuration  int
-	l1CooldownDuration   int
-	preSeatboxState      State
-	seatboxLockClosed    bool
-	initWakeL1           bool // L1 triggered from stale BMX latch during startup
-	wakeFromHibernation  bool // woken from hibernation by nRF52 accelerometer
-	hibernationImminent  bool // pm-service signalled hibernation is imminent or in progress
+	timers              map[string]*time.Timer
+	alarmEnabled        bool
+	vehicleStandby      bool
+	level2Cycles        int
+	requestDisarm       bool
+	alarmDuration       int
+	hairTriggerEnabled  bool
+	hairTriggerDuration int
+	l1CooldownDuration  int
+	preSeatboxState     State
+	seatboxLockClosed   bool
+	wakeFromHibernation bool // woken from hibernation by motion (motion-service stamp or live event)
+	hibernationImminent bool // pm-service signalled hibernation is imminent or in progress
 }
 
-// SensorConfig mirrors hwbmx.SensorConfig at the FSM layer to avoid an import cycle.
-type SensorConfig struct {
-	AnyMotion bool // true = any-motion engine; false = slow-motion engine
-	Bandwidth byte // PMU_BW register value; 0x08=7.81Hz, 0x09=15.63Hz, 0x0A=31.25Hz
-	Threshold byte // 1 LSB = 3.91 mg in 2g range
-	Duration  byte // N = dur+1 consecutive samples
-}
-
-// Per-state sensor configurations.
-var (
-	// sensorIdle: low-BW slow-motion used in init/delay/disarmed states (interrupt disabled).
-	sensorIdle = SensorConfig{AnyMotion: false, Bandwidth: 0x08, Threshold: 0x14, Duration: 0x02}
-
-	// sensorArmed: any-motion at 31.25 Hz — awake-armed profile, requires 64 ms of
-	// sustained slope above ~23 mg. Catches contact (hand, kid, dog leaning) while
-	// still rejecting brief vibration spikes from passing trucks/trams.
-	sensorArmed = SensorConfig{AnyMotion: true, Bandwidth: 0x0A, Threshold: 0x06, Duration: 0x03}
-
-	// sensorArmedHibernation: any-motion at 31.25 Hz — hibernation-armed profile,
-	// requires 64 ms of sustained slope above ~31 mg. Programmed into the BMX just
-	// before hibernation so the wake threshold survives the MDB power-down. Stricter
-	// than the awake profile so urban environmental vibration doesn't wake the MDB.
-	sensorArmedHibernation = SensorConfig{AnyMotion: true, Bandwidth: 0x0A, Threshold: 0x08, Duration: 0x03}
-
-	// sensorLevel1: slow-motion at 15.63 Hz — confirms deliberate push/tilt (~256 ms).
-	sensorLevel1 = SensorConfig{AnyMotion: false, Bandwidth: 0x09, Threshold: 0x08, Duration: 0x03}
-
-	// sensorWaiting: slow-motion at 7.81 Hz — conservative re-trigger for L2 (~512 ms).
-	sensorWaiting = SensorConfig{AnyMotion: false, Bandwidth: 0x08, Threshold: 0x06, Duration: 0x03}
-)
-
-// BMXClient interface for BMX commands
-type BMXClient interface {
-	ConfigureSensor(ctx context.Context, cfg SensorConfig) error
-	SetInterruptPin(ctx context.Context, pin InterruptPin) error
-	SoftReset(ctx context.Context) error
-	EnableInterrupt(ctx context.Context) error
-	DisableInterrupt(ctx context.Context) error
-	CheckInterruptStatus(ctx context.Context) (bool, error)
+// MotionRPC is the synchronous motion-service interface alarm-service needs:
+// the chip-config-confirmed handshake before pm-service is allowed to suspend.
+// Steady-state arm/disarm flows reactively through the alarm hash that
+// motion-service watches — no synchronous Call required for those.
+type MotionRPC interface {
+	PrepareHibernation(ctx context.Context) error
 }
 
 // StatusPublisher interface for publishing alarm status
@@ -187,7 +128,7 @@ type AlarmController interface {
 
 // New creates a new StateMachine
 func New(
-	bmx BMXClient,
+	motion MotionRPC,
 	pub StatusPublisher,
 	inh SuspendInhibitor,
 	alarm AlarmController,
@@ -199,7 +140,7 @@ func New(
 		state:               StateInit,
 		events:              make(chan Event, 100),
 		log:                 log,
-		bmxClient:           bmx,
+		motion:              motion,
 		publisher:           pub,
 		inhibitor:           inh,
 		alarmController:     alarm,
@@ -298,8 +239,8 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 		}
 		sm.hibernationImminent = e.Imminent
 		sm.log.Info("hibernation-imminent flag updated", "imminent", e.Imminent)
-		if sm.state == StateArmed {
-			sm.reprogramArmed(ctx)
+		if e.Imminent && sm.state == StateArmed {
+			sm.confirmHibernationProfile(ctx)
 		}
 		return
 	}
@@ -398,49 +339,25 @@ func (sm *StateMachine) stateToStatus(state State) string {
 	}
 }
 
-// armedSensorConfig returns the sensor profile to use in the armed state, based on
-// whether pm-service has signalled an imminent hibernation transition.
-func (sm *StateMachine) armedSensorConfig() SensorConfig {
-	if sm.hibernationImminent {
-		return sensorArmedHibernation
+// confirmHibernationProfile is the synchronous handshake that gates pm-service's
+// suspend on motion-service having the chip in armed-hibernation profile. Called
+// when hibernationImminent flips to true while we're in StateArmed. Steady-state
+// arm/disarm/L1/L2 transitions don't need this — motion-service watches the alarm
+// hash and reconfigures reactively. This is the one synchronous point: we have
+// to be sure the chip is right before pm-service kills the MDB.
+func (sm *StateMachine) confirmHibernationProfile(ctx context.Context) {
+	sm.log.Info("requesting motion-service prepare-hibernation")
+	if err := sm.motion.PrepareHibernation(ctx); err != nil {
+		// Keep the inhibitor held — pm-service must not be allowed to suspend
+		// with an unverified chip profile. Ops will see the error in journal
+		// and either restart motion-service or override.
+		sm.log.Error("prepare-hibernation failed; holding pm-inhibitor to block suspend", "error", err)
+		if err := sm.inhibitor.Acquire("Motion-service prepare-hibernation failed"); err != nil {
+			sm.log.Error("failed to acquire suspend inhibitor", "error", err)
+		}
+		return
 	}
-	return sensorArmed
-}
-
-// reprogramArmed reconfigures the BMX in-place while staying in the armed state.
-// Used when the hibernation-imminent flag flips so the registers going into (or
-// returning from) hibernation reflect the right profile without an FSM transition.
-func (sm *StateMachine) reprogramArmed(ctx context.Context) {
-	cfg := sm.armedSensorConfig()
-	sm.log.Info("reprogramming armed BMX profile",
-		"hibernation", sm.hibernationImminent,
-		"bw", cfg.Bandwidth,
-		"threshold", cfg.Threshold,
-		"duration", cfg.Duration)
-
-	if err := sm.bmxClient.ConfigureSensor(ctx, cfg); err != nil {
-		sm.log.Error("failed to reprogram sensor", "error", err)
-	}
-	if err := sm.bmxClient.EnableInterrupt(ctx); err != nil {
-		sm.log.Error("failed to re-enable interrupt", "error", err)
-	}
-}
-
-// configureBMX sends configuration commands to BMX hardware.
-func (sm *StateMachine) configureBMX(ctx context.Context, pin InterruptPin, cfg SensorConfig) {
-	if err := sm.bmxClient.SetInterruptPin(ctx, pin); err != nil {
-		sm.log.Error("failed to set interrupt pin", "pin", pin, "error", err)
-	}
-
-	if err := sm.bmxClient.ConfigureSensor(ctx, cfg); err != nil {
-		sm.log.Error("failed to configure sensor", "error", err)
-	}
-
-	mode := "slow-motion"
-	if cfg.AnyMotion {
-		mode = "any-motion"
-	}
-	sm.log.Info("configured BMX", "pin", pin, "mode", mode, "bw", cfg.Bandwidth, "threshold", cfg.Threshold, "duration", cfg.Duration)
+	sm.log.Info("motion-service confirmed armed-hibernation profile")
 }
 
 // startTimer starts a timer

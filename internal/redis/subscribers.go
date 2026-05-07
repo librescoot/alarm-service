@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -9,16 +10,28 @@ import (
 	ipc "github.com/librescoot/redis-ipc"
 )
 
+// motionEvent mirrors motion-service's MotionEvent JSON envelope. Kept
+// minimal to avoid a hard dependency on the motion-service repo. The Type
+// field is what gets propagated into BMXInterruptEvent.Data — the FSM
+// already discriminates "wake-hibernation" from regular edges via that
+// field. Decoded by hand in the subscription handler so this works
+// alongside the alarm-service redis-ipc client's StringCodec default.
+type motionEvent struct {
+	Type      string `json:"type"`
+	Timestamp int64  `json:"timestamp"`
+	Engine    string `json:"engine,omitempty"`
+}
+
 // Subscriber handles subscribing to Redis channels using HashWatcher
 type Subscriber struct {
-	vehicleWatcher          *ipc.HashWatcher
-	settingsWatcher         *ipc.HashWatcher
-	powerManagerWatcher     *ipc.HashWatcher
-	bmxWatcher              *ipc.Subscription[string]
-	ipc                     *ipc.Client
-	log                     *slog.Logger
-	sm                      *fsm.StateMachine
-	seatboxTriggerEnabled   bool
+	vehicleWatcher           *ipc.HashWatcher
+	settingsWatcher          *ipc.HashWatcher
+	powerManagerWatcher      *ipc.HashWatcher
+	motionWatcher            *ipc.Subscription[string]
+	ipc                      *ipc.Client
+	log                      *slog.Logger
+	sm                       *fsm.StateMachine
+	seatboxTriggerEnabled    bool
 	authorizedSeatboxPending bool
 }
 
@@ -206,18 +219,23 @@ func (s *Subscriber) Start() error {
 
 	s.sm.SendEvent(fsm.InitCompleteEvent{})
 
-	s.log.Info("starting BMX interrupt subscription")
+	s.log.Info("subscribing to motion:interrupt")
 	var err error
-	s.bmxWatcher, err = ipc.Subscribe(s.ipc, "bmx:interrupt", func(payload string) error {
-		s.log.Info("BMX interrupt received", "payload", payload)
+	s.motionWatcher, err = ipc.Subscribe(s.ipc, "motion:interrupt", func(payload string) error {
+		var evt motionEvent
+		if err := json.Unmarshal([]byte(payload), &evt); err != nil {
+			s.log.Warn("malformed motion:interrupt payload", "payload", payload, "error", err)
+			return nil
+		}
+		s.log.Info("motion event received", "type", evt.Type, "engine", evt.Engine, "timestamp", evt.Timestamp)
 		s.sm.SendEvent(fsm.BMXInterruptEvent{
-			Timestamp: 0,
-			Data:      payload,
+			Timestamp: evt.Timestamp,
+			Data:      evt.Type,
 		})
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("failed to subscribe to bmx:interrupt: %w", err)
+		return fmt.Errorf("failed to subscribe to motion:interrupt: %w", err)
 	}
 
 	return nil
@@ -228,7 +246,7 @@ func (s *Subscriber) Stop() {
 	s.vehicleWatcher.Stop()
 	s.settingsWatcher.Stop()
 	s.powerManagerWatcher.Stop()
-	if s.bmxWatcher != nil {
-		s.bmxWatcher.Unsubscribe()
+	if s.motionWatcher != nil {
+		s.motionWatcher.Unsubscribe()
 	}
 }

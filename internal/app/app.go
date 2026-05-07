@@ -4,21 +4,18 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"alarm-service/internal/alarm"
-	"alarm-service/internal/bmx"
 	"alarm-service/internal/fsm"
-	"alarm-service/internal/hardware"
-	hwbmx "alarm-service/internal/hardware/bmx"
-	"alarm-service/internal/hardware/driver"
 	"alarm-service/internal/pm"
 	"alarm-service/internal/redis"
 )
 
-// Config holds application configuration
+// Config holds application configuration. The chip-config flags
+// (--i2c-bus, --evdev-*, --poller-interval-ms) are gone — motion-service
+// owns the BMX055 now and alarm-service is a pure consumer of motion
+// events + the synchronous prepare-hibernation handshake.
 type Config struct {
-	I2CBus                     string
 	RedisAddr                  string
 	Logger                     *slog.Logger
 	AlarmEnabled               bool
@@ -35,29 +32,22 @@ type Config struct {
 	HairTriggerDurationFlagSet bool
 	L1Cooldown                 int
 	L1CooldownFlagSet          bool
-	EvdevDevice                string
-	EvdevKeycode               int
-	PollerIntervalMs           int
 }
 
-// App represents the alarm-service application
+// App represents the alarm-service application.
 type App struct {
-	cfg              *Config
-	log              *slog.Logger
-	redis            *redis.Client
-	publisher        *redis.Publisher
-	accel            *hwbmx.Accelerometer
-	gyro             *hwbmx.Gyroscope
-	bmxController    *bmx.HardwareController
-	interruptPoller  *hardware.InterruptPoller
-	interruptWatcher *hardware.InterruptWatcher
-	alarmController  *alarm.Controller
-	inhibitor        *pm.Inhibitor
-	stateMachine     *fsm.StateMachine
-	subscriber       *redis.Subscriber
+	cfg             *Config
+	log             *slog.Logger
+	redis           *redis.Client
+	publisher       *redis.Publisher
+	motion          *redis.MotionClient
+	alarmController *alarm.Controller
+	inhibitor       *pm.Inhibitor
+	stateMachine    *fsm.StateMachine
+	subscriber      *redis.Subscriber
 }
 
-// New creates a new App
+// New creates a new App.
 func New(cfg *Config) *App {
 	return &App{
 		cfg: cfg,
@@ -65,15 +55,9 @@ func New(cfg *Config) *App {
 	}
 }
 
-// Run runs the application
+// Run runs the application.
 func (a *App) Run(ctx context.Context) error {
-	a.log.Info("starting alarm-service",
-		"i2c_bus", a.cfg.I2CBus,
-		"redis_addr", a.cfg.RedisAddr)
-
-	if err := a.unbindDrivers(); err != nil {
-		return fmt.Errorf("unbind drivers: %w", err)
-	}
+	a.log.Info("starting alarm-service", "redis_addr", a.cfg.RedisAddr)
 
 	var err error
 	a.redis, err = redis.NewClient(a.cfg.RedisAddr, a.log)
@@ -86,37 +70,11 @@ func (a *App) Run(ctx context.Context) error {
 	defer a.redis.Close()
 
 	a.publisher = redis.NewPublisher(a.redis)
-
-	if err := a.initBMXHardware(); err != nil {
-		return fmt.Errorf("init bmx hardware: %w", err)
+	a.motion, err = redis.NewMotionClient(a.redis.IPC())
+	if err != nil {
+		return fmt.Errorf("create motion client: %w", err)
 	}
-	defer a.closeBMXHardware()
-
-	a.interruptPoller = hardware.NewInterruptPoller(a.accel, a.gyro, a.publisher, time.Duration(a.cfg.PollerIntervalMs)*time.Millisecond, a.log)
-	go a.interruptPoller.Run(ctx)
-
-	var watcherSource interface {
-		Enable()
-		Disable()
-	}
-	if a.cfg.EvdevDevice != "" {
-		a.interruptWatcher = hardware.NewInterruptWatcher(
-			a.cfg.EvdevDevice,
-			uint16(a.cfg.EvdevKeycode),
-			a.accel,
-			a.publisher,
-			a.log,
-		)
-		if err := a.interruptWatcher.Open(); err != nil {
-			a.log.Warn("evdev interrupt watcher disabled (falling back to poller only)", "error", err)
-			a.interruptWatcher = nil
-		} else {
-			watcherSource = a.interruptWatcher
-			go a.interruptWatcher.Run(ctx)
-		}
-	}
-
-	a.bmxController = bmx.NewHardwareController(a.accel, a.gyro, a.interruptPoller, watcherSource, a.log)
+	defer a.motion.Close()
 
 	a.alarmController, err = alarm.NewController(a.cfg.RedisAddr, a.cfg.HornEnabled, a.log)
 	if err != nil {
@@ -131,7 +89,7 @@ func (a *App) Run(ctx context.Context) error {
 	defer a.inhibitor.Close()
 
 	a.stateMachine = fsm.New(
-		a.bmxController,
+		a.motion,
 		a.publisher,
 		a.inhibitor,
 		a.alarmController,
@@ -144,8 +102,16 @@ func (a *App) Run(ctx context.Context) error {
 
 	a.subscriber = redis.NewSubscriber(a.redis, a.stateMachine, a.log)
 
-	if err := a.publishInitialStatus(); err != nil {
-		a.log.Warn("failed to publish initial BMX status", "error", err)
+	// Read motion-service's wake-cause stamp before anything else writes
+	// to motion. Persistent so this works even when motion-service
+	// stamped + published wake-hibernation before alarm-service had its
+	// subscriber up — the hash field is the durable backstop for that
+	// startup-ordering race.
+	if woke, err := a.motion.ConsumeWakeCause(ctx); err != nil {
+		a.log.Warn("consume motion.wake-cause failed", "error", err)
+	} else if woke {
+		a.log.Info("woke from hibernation motion (stamp from motion-service)")
+		a.stateMachine.SendEvent(fsm.BMXInterruptEvent{Data: "wake-hibernation"})
 	}
 
 	if err := a.handleCLIOverrides(); err != nil {
@@ -164,71 +130,7 @@ func (a *App) Run(ctx context.Context) error {
 	return nil
 }
 
-// unbindDrivers unbinds kernel drivers
-func (a *App) unbindDrivers() error {
-	a.log.Info("unbinding kernel drivers")
-
-	if err := driver.UnbindBMX055(); err != nil {
-		a.log.Warn("failed to unbind BMX055 drivers", "error", err)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-	return nil
-}
-
-// initBMXHardware initializes the BMX hardware with retries.
-// The BMX055 may not be ready on the I2C bus immediately after boot,
-// especially when the kernel driver was just unbound.
-func (a *App) initBMXHardware() error {
-	const maxRetries = 5
-	var err error
-
-	for attempt := range maxRetries {
-		a.accel, err = hwbmx.NewAccelerometer(a.cfg.I2CBus)
-		if err == nil {
-			break
-		}
-		if attempt < maxRetries-1 {
-			delay := time.Duration(100<<attempt) * time.Millisecond // 100, 200, 400, 800ms
-			a.log.Warn("accelerometer init failed, retrying", "attempt", attempt+1, "delay", delay, "error", err)
-			time.Sleep(delay)
-		}
-	}
-	if err != nil {
-		return fmt.Errorf("init accelerometer: %w", err)
-	}
-
-	a.gyro, err = hwbmx.NewGyroscope(a.cfg.I2CBus)
-	if err != nil {
-		return fmt.Errorf("init gyroscope: %w", err)
-	}
-
-	a.log.Info("BMX hardware initialized")
-	return nil
-}
-
-// closeBMXHardware closes the BMX hardware
-func (a *App) closeBMXHardware() {
-	if a.accel != nil {
-		a.accel.Close()
-	}
-	if a.gyro != nil {
-		a.gyro.Close()
-	}
-}
-
-// publishInitialStatus publishes initial BMX status to Redis using HashPublisher
-func (a *App) publishInitialStatus() error {
-	bmxPub := a.redis.IPC().NewHashPublisher("bmx")
-	return bmxPub.SetMany(map[string]any{
-		"initialized": "true",
-		"interrupt":   "disabled",
-		"sensitivity": "none",
-		"pin":         "none",
-	})
-}
-
-// handleCLIOverrides handles CLI flag overrides for settings
+// handleCLIOverrides handles CLI flag overrides for settings.
 func (a *App) handleCLIOverrides() error {
 	settingsPub := a.redis.IPC().NewHashPublisher("settings")
 
