@@ -1,5 +1,5 @@
 [Unit]
-Description=LibreScoot Alarm Service
+Description=Librescoot Alarm Service
 After=network.target redis.service librescoot-motion.service
 Wants=redis.service librescoot-motion.service
 
