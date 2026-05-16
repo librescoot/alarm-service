@@ -618,6 +618,30 @@ func TestStateMachine_UnauthorizedSeatboxFromLevel1(t *testing.T) {
 	}
 }
 
+func TestStateMachine_AuthorizedSeatboxFromDelayArmed(t *testing.T) {
+	sm, _, _, inh, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateDelayArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+
+	sm.SendEvent(SeatboxOpenedEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateSeatboxAccess {
+		t.Errorf("expected StateSeatboxAccess on authorized opening from delay_armed, got %s", sm.State())
+	}
+
+	if !inh.acquired {
+		t.Error("expected suspend inhibitor to be acquired in seatbox access")
+	}
+
+	if sm.preSeatboxState != StateDelayArmed {
+		t.Errorf("expected preSeatboxState to be StateDelayArmed, got %s", sm.preSeatboxState)
+	}
+}
+
 func TestStateMachine_AuthorizedSeatboxAccess(t *testing.T) {
 	sm, _, _, inh, _ := createTestStateMachine()
 	ctx := context.Background()

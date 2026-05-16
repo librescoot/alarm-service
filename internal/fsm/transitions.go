@@ -74,6 +74,10 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(DelayArmedTimerEvent); ok {
 			return StateArmed
 		}
+		if _, ok := event.(SeatboxOpenedEvent); ok {
+			sm.preSeatboxState = StateDelayArmed
+			return StateSeatboxAccess
+		}
 		if _, ok := event.(UnauthorizedSeatboxEvent); ok {
 			return StateTriggerLevel2
 		}

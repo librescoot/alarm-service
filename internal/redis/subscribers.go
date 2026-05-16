@@ -4,11 +4,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"alarm-service/internal/fsm"
 
 	ipc "github.com/librescoot/redis-ipc"
 )
+
+// seatboxBounceWindow filters spurious sensor edges right after an authorized
+// close. The latch can rebound briefly while the lid settles, which used to
+// surface as seatbox:lock=open without a paired seatbox:opened event and
+// triggered StateTriggerLevel2. 500ms covers observed mechanical settle time
+// while staying well below any plausible legit re-open cadence. A legit
+// re-open within this window still works because the app/button path emits
+// seatbox:opened first, which sets authorizedSeatboxPending and bypasses the
+// bounce check entirely.
+const seatboxBounceWindow = 500 * time.Millisecond
 
 // motionEvent mirrors motion-service's MotionEvent JSON envelope. Kept
 // minimal to avoid a hard dependency on the motion-service repo. The Type
@@ -33,6 +44,7 @@ type Subscriber struct {
 	sm                       *fsm.StateMachine
 	seatboxTriggerEnabled    bool
 	authorizedSeatboxPending bool
+	lastSeatboxCloseAt       time.Time
 }
 
 // NewSubscriber creates a new Subscriber with HashWatcher instances
@@ -90,6 +102,7 @@ func (s *Subscriber) setupVehicleWatcher() {
 		s.log.Debug("seatbox lock state changed", "state", lockState)
 		if lockState == "closed" {
 			s.authorizedSeatboxPending = false
+			s.lastSeatboxCloseAt = time.Now()
 			s.sm.SendEvent(fsm.SeatboxClosedEvent{})
 		} else if lockState == "open" {
 			if s.authorizedSeatboxPending {
@@ -98,6 +111,12 @@ func (s *Subscriber) setupVehicleWatcher() {
 			}
 			currentState := s.sm.State()
 			if currentState == fsm.StateSeatboxAccess {
+				return nil
+			}
+			if since := time.Since(s.lastSeatboxCloseAt); since < seatboxBounceWindow {
+				s.log.Info("seatbox open ignored as sensor bounce",
+					"since_close_ms", since.Milliseconds(),
+					"current_state", currentState.String())
 				return nil
 			}
 			if !s.seatboxTriggerEnabled {
