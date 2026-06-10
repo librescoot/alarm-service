@@ -210,7 +210,13 @@ func (sm *StateMachine) onEnterWaitingMovement(ctx context.Context) {
 	sm.alarmController.Start(time.Duration(sm.alarmDuration) * time.Second)
 
 	sm.startTimer("chip_setup", 47*time.Second, func() {
-		sm.configureBMX(sm.ctx, InterruptPinNone, sensorWaiting)
+		// INT1 (not None) so the slow-motion interrupt is mapped and latched —
+		// the I2C poller can then re-read it and emit BMXInterruptEvent, which
+		// is what re-triggers L2 on continued motion. With PinNone the latch is
+		// never armed, so the re-trigger window was dead and the alarm always
+		// de-escalated after one cycle. Self-trigger-safe: the active-siren
+		// state (TriggerLevel2) ignores BMXInterruptEvent.
+		sm.configureBMX(sm.ctx, InterruptPinINT1, sensorWaiting)
 		if err := sm.bmxClient.EnableInterrupt(sm.ctx); err != nil {
 			sm.log.Error("failed to enable interrupt", "error", err)
 		}
