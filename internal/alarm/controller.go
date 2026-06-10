@@ -81,6 +81,11 @@ func (c *Controller) SetCommander(commander RuntimeCommander) {
 func (c *Controller) SetHornEnabled(enabled bool) {
 	c.hornEnabled.Store(enabled)
 	c.log.Info("horn setting updated", "enabled", enabled)
+	if !enabled {
+		// Disabling mid-siren: clear any energized horn so it doesn't stay on
+		// until the alarm ends (the pattern won't push "off" while disabled).
+		c.ipc.LPush("scooter:horn", "off")
+	}
 }
 
 // Start starts the alarm for the specified duration
@@ -129,9 +134,9 @@ func (c *Controller) stopUnsafe() error {
 		c.cancel()
 	}
 
-	if c.hornEnabled.Load() {
-		c.ipc.LPush("scooter:horn", "off")
-	}
+	// Always turn the horn off when the alarm stops, even if honking was
+	// disabled mid-siren — otherwise the last "on" stays energized.
+	c.ipc.LPush("scooter:horn", "off")
 	c.ipc.LPush("scooter:blinker", "off")
 
 	c.alarmPub.Set("alarm-active", "false")
