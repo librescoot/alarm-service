@@ -44,6 +44,12 @@ func (sm *StateMachine) getTransition(event Event) State {
 		}
 
 	case StateWaitingEnabled:
+		// Keep the cached vehicle state fresh while disabled so a later enable
+		// arms correctly; otherwise a lock-to-standby here is dropped and the
+		// alarm wrongly routes to Disarmed until the next vehicle-state change.
+		if e, ok := event.(VehicleStateChangedEvent); ok {
+			sm.vehicleStandby = (e.State == VehicleStateStandby)
+		}
 		if e, ok := event.(AlarmModeChangedEvent); ok && e.Enabled {
 			sm.alarmEnabled = true
 			if sm.vehicleStandby {
