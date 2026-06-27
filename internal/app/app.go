@@ -82,7 +82,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	defer a.alarmController.Close()
 
-	a.inhibitor, err = pm.NewInhibitor(a.log)
+	a.inhibitor, err = pm.NewInhibitor(a.redis.IPC(), a.log)
 	if err != nil {
 		return fmt.Errorf("create suspend inhibitor: %w", err)
 	}

@@ -11,7 +11,7 @@ Part of the [Librescoot](https://librescoot.org/) open-source platform.
 - Direct I2C communication with accelerometer and gyroscope
 - Multi-level triggering (Level 1: notification, Level 2: alarm with horn + hazards)
 - Automatic BMX configuration based on alarm state
-- Suspend inhibitor management (wake locks)
+- Suspend inhibitor management (wake locks): holds a `block` inhibitor in pm-service's `power:inhibits` hash while the alarm is armed-delaying or triggered, so the MDB cannot suspend or hibernate mid-alarm
 - Horn pattern: 400ms on/off alternating
 - Hazard lights: continuous during alarm
 
@@ -129,6 +129,12 @@ redis-cli LPUSH scooter:alarm enable
 ```
 
 ## State-Specific Behavior
+
+"Wake Lock" is a `block` inhibitor in pm-service's `power:inhibits` hash (id
+`alarm-active`, who `librescoot-alarm`); pm-service holds off suspend and
+hibernate while it is held. `armed` deliberately drops the lock so an
+idle-armed scooter can still hibernate (motion-service rearms the chip to wake
+on motion); a real motion trigger re-acquires it before the alarm sounds.
 
 | State | Wake Lock | Sensitivity | INT Pin |
 |-------|-----------|-------------|---------|
