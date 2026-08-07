@@ -2,7 +2,7 @@ module alarm-service
 
 go 1.24.0
 
-require github.com/librescoot/redis-ipc v0.13.0
+require github.com/librescoot/redis-ipc v0.15.0
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
