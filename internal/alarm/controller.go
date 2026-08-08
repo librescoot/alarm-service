@@ -78,7 +78,9 @@ func NewController(redisAddr string, hornEnabled bool, log *slog.Logger) (*Contr
 
 // Close closes the controller
 func (c *Controller) Close() error {
-	c.Stop()
+	if err := c.Stop(); err != nil {
+		c.log.Error("failed to stop alarm during close", "error", err)
+	}
 	if c.cmdHandler != nil {
 		c.cmdHandler.Stop()
 	}
@@ -97,7 +99,9 @@ func (c *Controller) SetHornEnabled(enabled bool) {
 	if !enabled {
 		// Disabling mid-siren: clear any energized horn so it doesn't stay on
 		// until the alarm ends (the pattern won't push "off" while disabled).
-		c.ipc.LPush("scooter:horn", "off")
+		if _, err := c.ipc.LPush("scooter:horn", "off"); err != nil {
+			c.log.Error("failed to silence horn", "error", err)
+		}
 	}
 }
 
@@ -108,7 +112,9 @@ func (c *Controller) Start(duration time.Duration) error {
 
 	if c.active {
 		c.log.Warn("alarm already active, stopping previous alarm")
-		c.stopUnsafe()
+		if err := c.stopUnsafe(); err != nil {
+			c.log.Error("failed to stop previous alarm", "error", err)
+		}
 	}
 
 	c.log.Info("starting alarm", "duration", duration)
@@ -127,7 +133,9 @@ func (c *Controller) Start(duration time.Duration) error {
 		c.log.Error("failed to activate hazard lights", "error", err)
 	}
 
-	c.alarmPub.Set("alarm-active", "true")
+	if err := c.alarmPub.Set("alarm-active", "true"); err != nil {
+		c.log.Error("failed to publish alarm-active", "error", err)
+	}
 
 	go c.runHornPattern(ctx, duration)
 
@@ -160,10 +168,16 @@ func (c *Controller) stopUnsafe() error {
 
 	// Always turn the horn off when the alarm stops, even if honking was
 	// disabled mid-siren — otherwise the last "on" stays energized.
-	c.ipc.LPush("scooter:horn", "off")
-	c.ipc.LPush("scooter:blinker", "off")
+	if _, err := c.ipc.LPush("scooter:horn", "off"); err != nil {
+		c.log.Error("failed to turn off horn", "error", err)
+	}
+	if _, err := c.ipc.LPush("scooter:blinker", "off"); err != nil {
+		c.log.Error("failed to turn off blinker", "error", err)
+	}
 
-	c.alarmPub.Set("alarm-active", "false")
+	if err := c.alarmPub.Set("alarm-active", "false"); err != nil {
+		c.log.Error("failed to publish alarm-active", "error", err)
+	}
 
 	c.active = false
 	return nil
@@ -225,7 +239,9 @@ func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration)
 			ticks++
 			if ticks >= totalTicks {
 				c.log.Info("alarm duration expired", "cycles", cycles)
-				c.Stop()
+				if err := c.Stop(); err != nil {
+					c.log.Error("failed to stop alarm after duration expired", "error", err)
+				}
 				return
 			}
 		}
@@ -306,14 +322,20 @@ func (c *Controller) BlinkHazards() error {
 func (c *Controller) handleCommand(cmd string) {
 	switch cmd {
 	case "stop":
-		c.Stop()
+		if err := c.Stop(); err != nil {
+			c.log.Error("failed to stop alarm", "error", err)
+		}
 		return
 	case "enable":
-		c.settingsPub.Set("alarm.enabled", "true")
+		if err := c.settingsPub.Set("alarm.enabled", "true"); err != nil {
+			c.log.Error("failed to enable alarm", "error", err)
+		}
 		c.log.Info("alarm enabled via command")
 		return
 	case "disable":
-		c.settingsPub.Set("alarm.enabled", "false")
+		if err := c.settingsPub.Set("alarm.enabled", "false"); err != nil {
+			c.log.Error("failed to disable alarm", "error", err)
+		}
 		c.log.Info("alarm disabled via command")
 		return
 	case "arm":
@@ -337,5 +359,7 @@ func (c *Controller) handleCommand(cmd string) {
 		return
 	}
 
-	c.Start(time.Duration(duration) * time.Second)
+	if err := c.Start(time.Duration(duration) * time.Second); err != nil {
+		c.log.Error("failed to start alarm", "error", err)
+	}
 }

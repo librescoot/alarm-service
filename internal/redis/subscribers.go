@@ -262,10 +262,18 @@ func (s *Subscriber) Start() error {
 
 // Stop stops all watchers
 func (s *Subscriber) Stop() {
-	s.vehicleWatcher.Stop()
-	s.settingsWatcher.Stop()
-	s.powerManagerWatcher.Stop()
+	if err := s.vehicleWatcher.Stop(); err != nil {
+		s.log.Warn("failed to stop vehicle watcher", "error", err)
+	}
+	if err := s.settingsWatcher.Stop(); err != nil {
+		s.log.Warn("failed to stop settings watcher", "error", err)
+	}
+	if err := s.powerManagerWatcher.Stop(); err != nil {
+		s.log.Warn("failed to stop power-manager watcher", "error", err)
+	}
 	if s.motionWatcher != nil {
-		s.motionWatcher.Unsubscribe()
+		if err := s.motionWatcher.Unsubscribe(); err != nil {
+			s.log.Warn("failed to unsubscribe motion watcher", "error", err)
+		}
 	}
 }

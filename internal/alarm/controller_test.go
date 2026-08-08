@@ -26,7 +26,7 @@ func setupTestController(t *testing.T, hornEnabled bool) (*Controller, *ipc.Clie
 
 	ctx := context.Background()
 	if !client.Connected() {
-		client.Close()
+		_ = client.Close()
 		t.Skip("Redis not available, skipping test")
 	}
 
@@ -65,7 +65,9 @@ func TestController_HornPattern(t *testing.T) {
 	c, client := setupTestController(t, true)
 	defer client.Close()
 
-	c.Start(1 * time.Second)
+	if err := c.Start(1 * time.Second); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
 
 	time.Sleep(1500 * time.Millisecond)
 
@@ -78,7 +80,9 @@ func TestController_HornDisabled(t *testing.T) {
 	c, client := setupTestController(t, false)
 	defer client.Close()
 
-	c.Start(800 * time.Millisecond)
+	if err := c.Start(800 * time.Millisecond); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
 
 	time.Sleep(1200 * time.Millisecond)
 
@@ -99,7 +103,9 @@ func TestController_HandleCommand_StartWithDuration(t *testing.T) {
 		t.Error("expected alarm to be active after start command")
 	}
 
-	c.Stop()
+	if err := c.Stop(); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
 
 	if c.active {
 		t.Error("expected alarm to be inactive after stop")
