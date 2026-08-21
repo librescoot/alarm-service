@@ -87,7 +87,7 @@ func NewSubscriber(client *Client, sm *fsm.StateMachine, log *slog.Logger) *Subs
 	// all trigger the alarm
 	s.seatboxTriggerEnabled.Store(true)
 	s.buttonsTriggerEnabled.Store(true)
-	s.handlebarTriggerEnabled.Store(true)
+	s.handlebarTriggerEnabled.Store(false)
 
 	s.setupVehicleWatcher()
 	s.setupSettingsWatcher()

@@ -50,12 +50,16 @@ make build-amd64    # AMD64 binary
 alarm-service [flags]
 
 Flags:
-  --i2c-bus=/dev/i2c-3      I2C bus device path for BMX055
-  --redis=localhost:6379    Redis address
-  --log-level=info          Log level (debug, info, warn, error)
-  --alarm-duration=10       Alarm duration in seconds
-  --horn-enabled=false      Enable horn during alarm (overrides Redis setting)
-  --version                 Print version and exit
+  --redis=localhost:6379      Redis address
+  --log-level=info            Log level (debug, info, warn, error)
+  --alarm-enabled=true        Enable the alarm system
+  --alarm-duration=30         Level 2 alarm duration in seconds
+  --horn-enabled=false        Sound the horn during an alarm
+  --seatbox-trigger=true      Unauthorized seatbox opening triggers the alarm
+  --hair-trigger=false        Short alarm on the first trigger
+  --hair-trigger-duration=3   Hair trigger alarm duration in seconds
+  --l1-cooldown=15            Level 1 cooldown in seconds
+  --version                   Print version and exit
 ```
 
 ### Configuration Override
