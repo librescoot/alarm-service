@@ -52,7 +52,6 @@ type Subscriber struct {
 	ipc                      *ipc.Client
 	log                      *slog.Logger
 	sm                       eventSink
-	seatboxTriggerEnabled    bool
 	authorizedSeatboxPending bool
 	lastSeatboxCloseAt       time.Time
 
@@ -60,6 +59,7 @@ type Subscriber struct {
 	// in the FSM, so an opted-out source costs nothing downstream. Atomic
 	// because the settings watcher writes them from its own goroutine while
 	// the vehicle watcher and the buttons subscription read them from theirs.
+	seatboxTriggerEnabled   atomic.Bool
 	buttonsTriggerEnabled   atomic.Bool
 	handlebarTriggerEnabled atomic.Bool
 
@@ -75,16 +75,17 @@ type Subscriber struct {
 // NewSubscriber creates a new Subscriber with HashWatcher instances
 func NewSubscriber(client *Client, sm *fsm.StateMachine, log *slog.Logger) *Subscriber {
 	s := &Subscriber{
-		vehicleWatcher:        client.ipc.NewHashWatcher("vehicle"),
-		settingsWatcher:       client.ipc.NewHashWatcher("settings"),
-		powerManagerWatcher:   client.ipc.NewHashWatcher("power-manager"),
-		ipc:                   client.ipc,
-		log:                   log,
-		sm:                    sm,
-		seatboxTriggerEnabled: true, // default: seatbox opening can trigger alarm
+		vehicleWatcher:      client.ipc.NewHashWatcher("vehicle"),
+		settingsWatcher:     client.ipc.NewHashWatcher("settings"),
+		powerManagerWatcher: client.ipc.NewHashWatcher("power-manager"),
+		ipc:                 client.ipc,
+		log:                 log,
+		sm:                  sm,
 	}
 
-	// default: brake/horn/seatbox buttons and handlebar sensors can trigger alarm
+	// default: seatbox, brake/horn/seatbox buttons and handlebar sensors can
+	// all trigger the alarm
+	s.seatboxTriggerEnabled.Store(true)
 	s.buttonsTriggerEnabled.Store(true)
 	s.handlebarTriggerEnabled.Store(true)
 
@@ -127,40 +128,44 @@ func (s *Subscriber) setupVehicleWatcher() {
 		return nil
 	})
 
-	s.vehicleWatcher.OnField("seatbox:lock", func(lockState string) error {
-		s.log.Debug("seatbox lock state changed", "state", lockState)
-		if lockState == "closed" {
-			s.authorizedSeatboxPending = false
-			s.lastSeatboxCloseAt = time.Now()
-			s.sm.SendEvent(fsm.SeatboxClosedEvent{})
-		} else if lockState == "open" {
-			if s.authorizedSeatboxPending {
-				// seatbox:opened event was already received for this opening cycle; skip
-				return nil
-			}
-			currentState := s.sm.State()
-			if currentState == fsm.StateSeatboxAccess {
-				return nil
-			}
-			if since := time.Since(s.lastSeatboxCloseAt); since < seatboxBounceWindow {
-				s.log.Info("seatbox open ignored as sensor bounce",
-					"since_close_ms", since.Milliseconds(),
-					"current_state", currentState.String())
-				return nil
-			}
-			if !s.seatboxTriggerEnabled {
-				s.log.Info("seatbox opened, treating as authorized (seatbox-trigger disabled)")
-				s.sm.SendEvent(fsm.SeatboxOpenedEvent{})
-			} else {
-				s.log.Warn("unauthorized seatbox opening detected", "current_state", currentState.String())
-				s.sm.SendEvent(fsm.UnauthorizedSeatboxEvent{})
-			}
-		}
-		return nil
-	})
-
+	s.vehicleWatcher.OnField("seatbox:lock", s.handleSeatboxLockField)
 	s.vehicleWatcher.OnField("handlebar:lock-sensor", s.handleHandlebarLockField)
 	s.vehicleWatcher.OnField("handlebar:position", s.handleHandlebarPositionField)
+}
+
+// handleSeatboxLockField turns a seatbox latch edge into either an authorized
+// opening or a tamper trigger, after filtering the sensor bounce that follows
+// an authorized close.
+func (s *Subscriber) handleSeatboxLockField(lockState string) error {
+	s.log.Debug("seatbox lock state changed", "state", lockState)
+	if lockState == "closed" {
+		s.authorizedSeatboxPending = false
+		s.lastSeatboxCloseAt = time.Now()
+		s.sm.SendEvent(fsm.SeatboxClosedEvent{})
+	} else if lockState == "open" {
+		if s.authorizedSeatboxPending {
+			// seatbox:opened event was already received for this opening cycle; skip
+			return nil
+		}
+		currentState := s.sm.State()
+		if currentState == fsm.StateSeatboxAccess {
+			return nil
+		}
+		if since := time.Since(s.lastSeatboxCloseAt); since < seatboxBounceWindow {
+			s.log.Info("seatbox open ignored as sensor bounce",
+				"since_close_ms", since.Milliseconds(),
+				"current_state", currentState.String())
+			return nil
+		}
+		if !s.seatboxTriggerEnabled.Load() {
+			s.log.Info("seatbox opened, treating as authorized (seatbox-trigger disabled)")
+			s.sm.SendEvent(fsm.SeatboxOpenedEvent{})
+		} else {
+			s.log.Warn("unauthorized seatbox opening detected", "current_state", currentState.String())
+			s.sm.SendEvent(fsm.UnauthorizedSeatboxEvent{})
+		}
+	}
+	return nil
 }
 
 // handleHandlebarLockField emits a trigger only for a locked-to-unlocked
@@ -248,7 +253,7 @@ func (s *Subscriber) setupSettingsWatcher() {
 	s.settingsWatcher.OnField("alarm.seatbox-trigger", func(seatboxTrigger string) error {
 		enabled := seatboxTrigger == "true"
 		s.log.Info("seatbox-trigger setting changed", "enabled", enabled)
-		s.seatboxTriggerEnabled = enabled
+		s.seatboxTriggerEnabled.Store(enabled)
 		return nil
 	})
 

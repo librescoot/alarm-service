@@ -3,6 +3,7 @@ package redis
 import (
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 
 	"alarm-service/internal/fsm"
@@ -26,6 +27,7 @@ func newTestSubscriber() (*Subscriber, *fakeEventSink) {
 		log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		sm:  sink,
 	}
+	s.seatboxTriggerEnabled.Store(true)
 	s.buttonsTriggerEnabled.Store(true)
 	s.handlebarTriggerEnabled.Store(true)
 	return s, sink
@@ -243,4 +245,72 @@ func TestHandlebarPosition_FlagDisabledSuppresses(t *testing.T) {
 	if len(sink.events) != 0 {
 		t.Fatalf("expected no events when handlebar disabled, got %v", sink.events)
 	}
+}
+
+// alarm.seatbox-trigger=false downgrades an unauthorized opening to an
+// authorized one instead of escalating.
+func TestSeatboxLock_FlagDisabledTreatsOpenAsAuthorized(t *testing.T) {
+	s, sink := newTestSubscriber()
+	s.seatboxTriggerEnabled.Store(false)
+
+	if err := s.handleSeatboxLockField("open"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(sink.events) != 1 {
+		t.Fatalf("expected 1 event, got %d: %v", len(sink.events), sink.events)
+	}
+	if _, ok := sink.events[0].(fsm.SeatboxOpenedEvent); !ok {
+		t.Errorf("expected SeatboxOpenedEvent, got %T", sink.events[0])
+	}
+}
+
+// With the flag on, the same edge is tampering.
+func TestSeatboxLock_FlagEnabledTriggers(t *testing.T) {
+	s, sink := newTestSubscriber()
+
+	_ = s.handleSeatboxLockField("open")
+
+	if len(sink.events) != 1 {
+		t.Fatalf("expected 1 event, got %d: %v", len(sink.events), sink.events)
+	}
+	if _, ok := sink.events[0].(fsm.UnauthorizedSeatboxEvent); !ok {
+		t.Errorf("expected UnauthorizedSeatboxEvent, got %T", sink.events[0])
+	}
+}
+
+// The settings watcher writes the trigger flags from its own goroutine while
+// the vehicle watcher and the buttons subscription read them from theirs.
+// Under -race this fails if any of the three goes back to a plain bool.
+func TestSubscriber_TriggerFlagsCrossGoroutine(t *testing.T) {
+	s, _ := newTestSubscriber()
+
+	const iterations = 500
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			enabled := i%2 == 0
+			s.seatboxTriggerEnabled.Store(enabled)
+			s.buttonsTriggerEnabled.Store(enabled)
+			s.handlebarTriggerEnabled.Store(enabled)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_ = s.handleSeatboxLockField("open")
+			_ = s.handleSeatboxLockField("closed")
+			_ = s.handleHandlebarLockField("locked")
+			_ = s.handleHandlebarLockField("unlocked")
+			_ = s.handleHandlebarPositionField("on-place")
+			_ = s.handleHandlebarPositionField("off-place")
+			_ = s.handleButtonEvent("horn:on")
+		}
+	}()
+
+	wg.Wait()
 }
