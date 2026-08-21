@@ -101,6 +101,13 @@ func (s TriggerSource) String() string {
 	}
 }
 
+// isHandlebar reports whether the source is one of the two handlebar sensors.
+// Both hang off the same physical assembly and both see edges the vehicle
+// produces while locking itself, so they share the post-arm settling window.
+func (s TriggerSource) isHandlebar() bool {
+	return s == TriggerSourceHandlebarLock || s == TriggerSourceHandlebarPosition
+}
+
 // InputTriggerEvent signals tampering detected through a discrete input rather
 // than through motion. Escalates exactly like BMXInterruptEvent. The subscriber
 // only emits it when the matching alarm.trigger.* flag is on, so the FSM never
@@ -150,6 +157,12 @@ func (e Level1CheckTimerEvent) Type() string { return "level1_check_timer" }
 type Level2CheckTimerEvent struct{}
 
 func (e Level2CheckTimerEvent) Type() string { return "level2_check_timer" }
+
+// HandlebarSettleTimerEvent signals the post-arm settling window has elapsed and
+// the handlebar sensors count as tamper sources again.
+type HandlebarSettleTimerEvent struct{}
+
+func (e HandlebarSettleTimerEvent) Type() string { return "handlebar_settle_timer" }
 
 // HibernateAfterWakeTimerEvent signals the post-hibernation-wake cooldown has elapsed
 type HibernateAfterWakeTimerEvent struct{}

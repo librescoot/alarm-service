@@ -92,6 +92,14 @@ transition seen after startup. A scooter parked with the handlebar lock never
 engaged reports "unlocked" as its resting value, and that must not fire the
 alarm every time the service restarts.
 
+Both handlebar sources also stay muted for 90 seconds after the alarm arms.
+Locking the vehicle is itself a handlebar event: vehicle-service pulses the
+lock solenoid with retries and keeps a 60 second positioning window open for a
+rider who still has to swing the bars into place, and either can bounce the
+lock sensor or move the position sensor while the alarm is already armed. The
+window restarts on every arm, and edges inside it are dropped rather than
+replayed afterwards. Motion, buttons and the seatbox are not muted.
+
 Buttons and handlebar events are filtered in the subscriber, so a source that
 is switched off costs the state machine nothing. Motion is filtered in the
 state machine instead, because motion events also carry the

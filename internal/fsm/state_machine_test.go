@@ -1250,3 +1250,133 @@ func TestStateMachine_MotionTriggerSettingChange(t *testing.T) {
 		t.Errorf("state should not change on a setting update, got %s", sm.State())
 	}
 }
+
+// armForTest drives DelayArmed -> Armed through the real handler so
+// onEnterArmed runs and opens the handlebar settling window.
+func armForTest(t *testing.T, ctx context.Context, sm *StateMachine) {
+	t.Helper()
+
+	sm.state = StateDelayArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+
+	sm.SendEvent(DelayArmedTimerEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateArmed {
+		t.Fatalf("expected StateArmed, got %s", sm.State())
+	}
+}
+
+// Both handlebar sources stay muted for the settling window after arming: the
+// vehicle is still working its own lock at that point. Motion is not muted.
+func TestStateMachine_HandlebarTriggersMutedAfterArming(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	armForTest(t, ctx, sm)
+
+	if sm.handlebarSettled {
+		t.Fatal("expected the settling window to be open right after arming")
+	}
+	if _, ok := sm.timers["handlebar_settle"]; !ok {
+		t.Error("expected a handlebar_settle timer to be running")
+	}
+
+	for _, source := range []TriggerSource{TriggerSourceHandlebarLock, TriggerSourceHandlebarPosition} {
+		sm.SendEvent(InputTriggerEvent{Source: source})
+		sm.handleEvent(ctx, <-sm.events)
+
+		if sm.State() != StateArmed {
+			t.Fatalf("%s should have been dropped inside the settling window, got %s", source, sm.State())
+		}
+	}
+
+	sm.SendEvent(BMXInterruptEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateTriggerLevel1Wait {
+		t.Errorf("motion must not be muted by the handlebar window, got %s", sm.State())
+	}
+}
+
+// The window covers the handlebar only. A button press during it still fires.
+func TestStateMachine_ButtonTriggersIgnoreHandlebarWindow(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	armForTest(t, ctx, sm)
+
+	sm.SendEvent(InputTriggerEvent{Source: TriggerSourceBrakeLeft})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateTriggerLevel1Wait {
+		t.Errorf("expected a brake press to escalate during the handlebar window, got %s", sm.State())
+	}
+}
+
+// Once the window elapses, a handlebar edge escalates like any other tamper.
+func TestStateMachine_HandlebarTriggerEscalatesAfterSettling(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	armForTest(t, ctx, sm)
+
+	sm.SendEvent(HandlebarSettleTimerEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if !sm.handlebarSettled {
+		t.Fatal("expected the settling window to be closed")
+	}
+	if sm.State() != StateArmed {
+		t.Fatalf("the settle timer must not move the FSM, got %s", sm.State())
+	}
+
+	sm.SendEvent(InputTriggerEvent{Source: TriggerSourceHandlebarLock})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateTriggerLevel1Wait {
+		t.Errorf("expected StateTriggerLevel1Wait after the window closed, got %s", sm.State())
+	}
+}
+
+// Disarming and rearming opens a fresh window: the next lock cycle produces
+// the same self-inflicted handlebar edges as the first one did.
+func TestStateMachine_HandlebarWindowResetsOnRearm(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	armForTest(t, ctx, sm)
+
+	sm.SendEvent(HandlebarSettleTimerEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateParked})
+	sm.handleEvent(ctx, <-sm.events)
+	if sm.State() != StateDisarmed {
+		t.Fatalf("expected StateDisarmed, got %s", sm.State())
+	}
+
+	sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateStandby})
+	sm.handleEvent(ctx, <-sm.events)
+	if sm.State() != StateDelayArmed {
+		t.Fatalf("expected StateDelayArmed, got %s", sm.State())
+	}
+
+	sm.SendEvent(DelayArmedTimerEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+	if sm.State() != StateArmed {
+		t.Fatalf("expected StateArmed, got %s", sm.State())
+	}
+
+	if sm.handlebarSettled {
+		t.Error("expected a fresh settling window after rearming")
+	}
+
+	sm.SendEvent(InputTriggerEvent{Source: TriggerSourceHandlebarPosition})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateArmed {
+		t.Errorf("expected the handlebar trigger to be dropped again, got %s", sm.State())
+	}
+}

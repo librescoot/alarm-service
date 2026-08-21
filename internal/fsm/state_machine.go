@@ -65,6 +65,21 @@ func (s Sensitivity) String() string {
 // state, this targets roughly 10 minutes of alarm before the safety valve trips.
 const maxLevel2Cycles = 6
 
+// handlebarSettleDelay mutes the two handlebar trigger sources for a while
+// after the alarm arms. Locking the vehicle is itself a handlebar event:
+// vehicle-service pulses the lock solenoid for 1.1s with up to three retries,
+// and for a rider who has to swing the bars into place first it keeps a 60s
+// positioning window open, pulsing again whenever the bars arrive. Any of
+// those can bounce the lock sensor or move the position sensor while we are
+// already armed, which reads exactly like tampering.
+//
+// Arming starts ~5s after the vehicle reaches stand-by, so a 60s delay here
+// would expire just as vehicle-service's own 60s window closes, and the
+// retry pulses that follow a late positioning would land outside it. 90s
+// clears the window plus the retries with ~30s to spare. Motion, buttons and
+// the seatbox stay live throughout, so the vehicle is not unwatched.
+const handlebarSettleDelay = 90 * time.Second
+
 // StateMachine implements the alarm FSM
 type StateMachine struct {
 	mu     sync.RWMutex
@@ -97,6 +112,11 @@ type StateMachine struct {
 	// and handlebar equivalents are filtered in the subscriber; motion is
 	// filtered here so the wake-from-hibernation stamp survives the drop.
 	motionTriggerEnabled bool
+
+	// handlebarSettled is false while the post-arm settling window runs, during
+	// which handlebar edges are the vehicle locking itself rather than
+	// tampering. See handlebarSettleDelay.
+	handlebarSettled bool
 }
 
 // MotionRPC is the synchronous motion-service interface alarm-service needs:
@@ -163,6 +183,10 @@ func New(
 		seatboxLockClosed:   true,
 
 		motionTriggerEnabled: true,
+
+		// Nothing has armed yet, so there is no settling window to sit out.
+		// onEnterArmed opens one on every entry into armed.
+		handlebarSettled: true,
 	}
 }
 
@@ -256,6 +280,12 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 		return
 	}
 
+	if _, ok := event.(HandlebarSettleTimerEvent); ok {
+		sm.handlebarSettled = true
+		sm.log.Debug("handlebar settling window elapsed, handlebar triggers live again")
+		return
+	}
+
 	if e, ok := event.(HibernationImminentEvent); ok {
 		if sm.hibernationImminent == e.Imminent {
 			return
@@ -312,6 +342,16 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 			sm.wakeFromHibernation = true
 		}
 		sm.log.Debug("dropping motion event, motion trigger source disabled", "data", be.Data)
+		return
+	}
+
+	// Handlebar edges inside the settling window are the vehicle working its
+	// own lock, see handlebarSettleDelay. Dropped outright rather than held
+	// back: by the time the window closes the edge is stale, and replaying it
+	// would sound the alarm for something that finished a minute ago.
+	if e, ok := event.(InputTriggerEvent); ok && e.Source.isHandlebar() && !sm.handlebarSettled {
+		sm.log.Debug("dropping handlebar trigger, still inside the post-arm settling window",
+			"source", e.Source.String())
 		return
 	}
 

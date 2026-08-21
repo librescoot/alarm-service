@@ -85,6 +85,16 @@ func (sm *StateMachine) onEnterArmed(ctx context.Context) {
 		sm.log.Error("failed to release inhibitor", "error", err)
 	}
 
+	// Mute the handlebar sources for the settling window. Reset on every entry
+	// into armed, so a disarm/rearm cycle gets a fresh one. The timer is left
+	// running when armed is left: an escalation must not strand the sources
+	// muted, and the window is about wall-clock time since arming, not about
+	// which state we happen to be in when it ends.
+	sm.handlebarSettled = false
+	sm.startTimer("handlebar_settle", handlebarSettleDelay, func() {
+		sm.SendEvent(HandlebarSettleTimerEvent{})
+	})
+
 	// If pm-service already signalled hibernation-imminent before we got
 	// here, perform the synchronous prepare-hibernation handshake now —
 	// without it, motion-service might still be programming the
