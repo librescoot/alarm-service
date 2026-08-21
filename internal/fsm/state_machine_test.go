@@ -1097,3 +1097,156 @@ func TestStateMachine_PostAlarmCooldownIgnoredWhenAlarmDisabled(t *testing.T) {
 		t.Errorf("expected to remain in StateDisarmed, got %s", sm.State())
 	}
 }
+
+// An input trigger in StateArmed escalates to L1 wait, same as motion.
+func TestStateMachine_ArmedInputTriggerEscalatesToL1Wait(t *testing.T) {
+	sm, _, _, inh, alarm := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+
+	sm.SendEvent(InputTriggerEvent{Source: TriggerSourceBrakeLeft})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateTriggerLevel1Wait {
+		t.Errorf("expected StateTriggerLevel1Wait on input trigger, got %s", sm.State())
+	}
+	if !inh.acquired {
+		t.Error("expected inhibitor acquired in L1 wait")
+	}
+	if alarm.blinkCalled != 1 {
+		t.Errorf("expected hazards to blink once entering L1 wait, got %d", alarm.blinkCalled)
+	}
+}
+
+// An input trigger in StateTriggerLevel1 escalates to L2 and blinks hazards,
+// same as motion at that point.
+func TestStateMachine_Level1InputTriggerEscalatesToL2(t *testing.T) {
+	sm, _, _, _, alarm := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateTriggerLevel1
+	sm.alarmDuration = 10
+
+	sm.SendEvent(InputTriggerEvent{Source: TriggerSourceHandlebarLock})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateTriggerLevel2 {
+		t.Errorf("expected StateTriggerLevel2, got %s", sm.State())
+	}
+	if !alarm.active {
+		t.Error("expected alarm to be active in level 2")
+	}
+	if alarm.blinkCalled != 1 {
+		t.Errorf("expected hazards to blink once during L1->L2, got %d", alarm.blinkCalled)
+	}
+}
+
+// StateWaitingMovement escalates back to L2 on an input trigger and counts the
+// cycle, same as motion.
+func TestStateMachine_WaitingMovementInputTriggerEscalates(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateWaitingMovement
+	sm.level2Cycles = 1
+
+	sm.SendEvent(InputTriggerEvent{Source: TriggerSourceHornButton})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateTriggerLevel2 {
+		t.Errorf("expected StateTriggerLevel2, got %s", sm.State())
+	}
+	if sm.level2Cycles != 2 {
+		t.Errorf("expected level2Cycles 2, got %d", sm.level2Cycles)
+	}
+}
+
+// alarm.trigger.motion=false drops motion events without a state change while
+// input triggers keep working.
+func TestStateMachine_MotionDisabledDropsMotionKeepsInputs(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.motionTriggerEnabled = false
+
+	sm.SendEvent(BMXInterruptEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+	if sm.State() != StateArmed {
+		t.Errorf("expected StateArmed with motion disabled, got %s", sm.State())
+	}
+
+	sm.SendEvent(InputTriggerEvent{Source: TriggerSourceBrakeLeft})
+	sm.handleEvent(ctx, <-sm.events)
+	if sm.State() != StateTriggerLevel1Wait {
+		t.Errorf("expected StateTriggerLevel1Wait on input trigger, got %s", sm.State())
+	}
+}
+
+// Dropping a motion event must not lose the wake-from-hibernation stamp: the
+// alarm stays quiet but the re-hibernate cooldown still needs to run.
+func TestStateMachine_MotionDisabledKeepsWakeStamp(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.motionTriggerEnabled = false
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+
+	sm.SendEvent(BMXInterruptEvent{Data: "wake-hibernation"})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if !sm.wakeFromHibernation {
+		t.Error("expected wake-from-hibernation to be recorded even with motion disabled")
+	}
+
+	sm.SendEvent(InitCompleteEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateArmed {
+		t.Errorf("expected StateArmed instead of an L1 escalation, got %s", sm.State())
+	}
+}
+
+// With motion enabled a wake-from-hibernation stamp still escalates to L1 on
+// init, which is the pre-existing behaviour.
+func TestStateMachine_MotionEnabledWakeStampEscalatesOnInit(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+
+	sm.SendEvent(BMXInterruptEvent{Data: "wake-hibernation"})
+	sm.handleEvent(ctx, <-sm.events)
+	sm.SendEvent(InitCompleteEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateTriggerLevel1Wait {
+		t.Errorf("expected StateTriggerLevel1Wait, got %s", sm.State())
+	}
+}
+
+// The settings event updates the flag in place, without a state transition.
+func TestStateMachine_MotionTriggerSettingChange(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	if !sm.motionTriggerEnabled {
+		t.Fatal("motion trigger should default to enabled")
+	}
+
+	sm.SendEvent(MotionTriggerSettingChangedEvent{Enabled: false})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.motionTriggerEnabled {
+		t.Error("motion trigger should be disabled after the setting change")
+	}
+	if sm.State() != StateArmed {
+		t.Errorf("state should not change on a setting update, got %s", sm.State())
+	}
+}

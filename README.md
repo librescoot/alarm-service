@@ -70,12 +70,47 @@ Flags:
 
 - `HGET settings alarm.enabled` - Alarm enabled (true/false)
 - `HGET settings alarm.honk` - Horn enabled during alarm (true/false)
+- `HGET settings alarm.seatbox-trigger` - Unauthorized seatbox opening triggers the alarm (true/false)
+- `HGET settings alarm.trigger.motion` - Motion is a trigger source (true/false, default true)
+- `HGET settings alarm.trigger.buttons` - Brake/horn/seatbox button presses are a trigger source (true/false, default true)
+- `HGET settings alarm.trigger.handlebar` - Handlebar lock sensor and position are a trigger source (true/false, default true)
+
+### Trigger Sources
+
+Every tamper source can be switched off on its own. All default to on, so an
+untouched scooter behaves exactly as before.
+
+| Setting | What it gates |
+|---|---|
+| `alarm.trigger.motion` | motion events from motion-service |
+| `alarm.trigger.buttons` | brake left/right, horn and seatbox button presses on the `buttons` channel |
+| `alarm.trigger.handlebar` | `vehicle.handlebar:lock-sensor` going unlocked, `vehicle.handlebar:position` going off-place |
+| `alarm.seatbox-trigger` | unauthorized `vehicle.seatbox:lock=open` |
+
+The handlebar sensors only count as tampering on a genuine safe-to-unsafe
+transition seen after startup. A scooter parked with the handlebar lock never
+engaged reports "unlocked" as its resting value, and that must not fire the
+alarm every time the service restarts.
+
+Buttons and handlebar events are filtered in the subscriber, so a source that
+is switched off costs the state machine nothing. Motion is filtered in the
+state machine instead, because motion events also carry the
+wake-from-hibernation stamp that the re-hibernate cooldown depends on.
+
+Switching a source off suppresses the alarm, not the wake. The accelerometer
+still asserts its interrupt and the nRF52 still wakes the MDB;
+`alarm.trigger.motion=false` only means the resulting event is dropped instead
+of escalated.
+
+Throttle is deliberately absent. It is only visible as a CAN payload from the
+ECU, and the ECU is powered down in Standby.
 
 ### Subscribed Channels
 
 - `vehicle` - Vehicle state changes (payload: "state")
 - `settings` - Settings changes (payload: "alarm.enabled" or "alarm.honk")
 - `bmx:interrupt` - Motion detection from integrated BMX055 hardware
+- `buttons` - Button edges from vehicle-service (`brake:{left,right}:{on,off}`, `horn:{on,off}`, `seatbox:{on,off}`)
 
 ### Published Status
 

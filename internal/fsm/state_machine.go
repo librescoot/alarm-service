@@ -92,6 +92,11 @@ type StateMachine struct {
 	seatboxLockClosed   bool
 	wakeFromHibernation bool // woken from hibernation by motion (motion-service stamp or live event)
 	hibernationImminent bool // pm-service signalled hibernation is imminent or in progress
+
+	// motionTriggerEnabled mirrors settings alarm.trigger.motion. The button
+	// and handlebar equivalents are filtered in the subscriber; motion is
+	// filtered here so the wake-from-hibernation stamp survives the drop.
+	motionTriggerEnabled bool
 }
 
 // MotionRPC is the synchronous motion-service interface alarm-service needs:
@@ -156,7 +161,19 @@ func New(
 		l1CooldownDuration:  5,
 		preSeatboxState:     StateInit,
 		seatboxLockClosed:   true,
+
+		motionTriggerEnabled: true,
 	}
+}
+
+// isTamperTrigger reports whether an event is a tamper trigger, meaning motion
+// or one of the discrete inputs. Both feed the same escalation path.
+func isTamperTrigger(e Event) bool {
+	switch e.(type) {
+	case BMXInterruptEvent, InputTriggerEvent:
+		return true
+	}
+	return false
 }
 
 // Run runs the state machine event loop
@@ -233,6 +250,12 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 		return
 	}
 
+	if e, ok := event.(MotionTriggerSettingChangedEvent); ok {
+		sm.motionTriggerEnabled = e.Enabled
+		sm.log.Info("motion trigger source updated", "enabled", e.Enabled)
+		return
+	}
+
 	if e, ok := event.(HibernationImminentEvent); ok {
 		if sm.hibernationImminent == e.Imminent {
 			return
@@ -280,6 +303,18 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 		// the StateDisarmed handler below (Disarmed → DelayArmed → Armed).
 	}
 
+	// alarm.trigger.motion=false: motion never escalates the alarm. The
+	// wake-from-hibernation stamp is still recorded, so the re-hibernate
+	// bookkeeping keeps working. This only suppresses the trigger; the chip
+	// still asserts its interrupt and the nRF52 still wakes the MDB.
+	if be, ok := event.(BMXInterruptEvent); ok && !sm.motionTriggerEnabled {
+		if be.Data == "wake-hibernation" {
+			sm.wakeFromHibernation = true
+		}
+		sm.log.Debug("dropping motion event, motion trigger source disabled", "data", be.Data)
+		return
+	}
+
 	oldState := sm.state
 	sm.log.Debug("handling event",
 		"event", event.Type(),
@@ -288,13 +323,11 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 	newState := sm.getTransition(event)
 
 	if newState != oldState {
-		// Blink hazards when movement detected during L1 (before L2 activation)
-		if oldState == StateTriggerLevel1 && newState == StateTriggerLevel2 {
-			if _, ok := event.(BMXInterruptEvent); ok {
-				sm.log.Info("movement detected during L1, blinking hazards")
-				if err := sm.alarmController.BlinkHazards(); err != nil {
-					sm.log.Error("failed to blink hazards", "error", err)
-				}
+		// Blink hazards when tampering is detected during L1 (before L2 activation)
+		if oldState == StateTriggerLevel1 && newState == StateTriggerLevel2 && isTamperTrigger(event) {
+			sm.log.Info("tampering detected during L1, blinking hazards", "event", event.Type())
+			if err := sm.alarmController.BlinkHazards(); err != nil {
+				sm.log.Error("failed to blink hazards", "error", err)
 			}
 		}
 

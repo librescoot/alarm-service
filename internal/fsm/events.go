@@ -67,6 +67,60 @@ type BMXInterruptEvent struct {
 
 func (e BMXInterruptEvent) Type() string { return "bmx_interrupt" }
 
+// TriggerSource identifies which discrete input produced an InputTriggerEvent.
+// Motion and the seatbox lock keep their own event types; this covers the
+// remaining tamper inputs (handlebar buttons, brake levers, handlebar sensors).
+type TriggerSource int
+
+const (
+	TriggerSourceUnknown TriggerSource = iota
+	TriggerSourceBrakeLeft
+	TriggerSourceBrakeRight
+	TriggerSourceSeatboxButton
+	TriggerSourceHornButton
+	TriggerSourceHandlebarLock
+	TriggerSourceHandlebarPosition
+)
+
+func (s TriggerSource) String() string {
+	switch s {
+	case TriggerSourceBrakeLeft:
+		return "brake_left"
+	case TriggerSourceBrakeRight:
+		return "brake_right"
+	case TriggerSourceSeatboxButton:
+		return "seatbox_button"
+	case TriggerSourceHornButton:
+		return "horn_button"
+	case TriggerSourceHandlebarLock:
+		return "handlebar_lock"
+	case TriggerSourceHandlebarPosition:
+		return "handlebar_position"
+	default:
+		return "unknown"
+	}
+}
+
+// InputTriggerEvent signals tampering detected through a discrete input rather
+// than through motion. Escalates exactly like BMXInterruptEvent. The subscriber
+// only emits it when the matching alarm.trigger.* flag is on, so the FSM never
+// spends a cycle on a source the user opted out of.
+type InputTriggerEvent struct {
+	Source TriggerSource
+}
+
+func (e InputTriggerEvent) Type() string { return "input_trigger" }
+
+// MotionTriggerSettingChangedEvent signals alarm.trigger.motion changed. Motion
+// is gated in the FSM rather than in the subscriber because motion events also
+// carry the wake-from-hibernation stamp, which stays relevant with the trigger
+// off.
+type MotionTriggerSettingChangedEvent struct {
+	Enabled bool
+}
+
+func (e MotionTriggerSettingChangedEvent) Type() string { return "motion_trigger_setting_changed" }
+
 // RuntimeArmEvent forces the FSM to arm without changing alarm.enabled
 type RuntimeArmEvent struct{}
 

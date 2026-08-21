@@ -32,9 +32,11 @@ func (sm *StateMachine) getTransition(event Event) State {
 					// If motion-service stamped wake-hibernation onto our event
 					// stream during init (either via the durable motion.wake-cause
 					// hash field or the live motion:interrupt pub/sub), drop
-					// straight to L1 wait — the motion edge that fired the latch
+					// straight to L1 wait: the motion edge that fired the latch
 					// was the wake event, treat it as a real motion trigger.
-					if sm.wakeFromHibernation {
+					// With alarm.trigger.motion off we keep the flag (the
+					// re-hibernate cooldown needs it) but skip the escalation.
+					if sm.wakeFromHibernation && sm.motionTriggerEnabled {
 						sm.log.Info("init wake-from-hibernation, triggering L1")
 						return StateTriggerLevel1Wait
 					}
@@ -113,6 +115,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 			}
 			return StateTriggerLevel1Wait
 		}
+		if _, ok := event.(InputTriggerEvent); ok {
+			return StateTriggerLevel1Wait
+		}
 		if e, ok := event.(VehicleStateChangedEvent); ok && shouldDisarmForVehicleState(e.State) {
 			sm.vehicleStandby = false
 			return StateDisarmed
@@ -162,7 +167,7 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(Level1CheckTimerEvent); ok {
 			return StateDelayArmed
 		}
-		if _, ok := event.(BMXInterruptEvent); ok {
+		if isTamperTrigger(event) {
 			return StateTriggerLevel2
 		}
 		if e, ok := event.(VehicleStateChangedEvent); ok && shouldDisarmForVehicleState(e.State) {
@@ -200,7 +205,7 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(Level2CheckTimerEvent); ok {
 			return StateDelayArmed
 		}
-		if _, ok := event.(BMXInterruptEvent); ok {
+		if isTamperTrigger(event) {
 			sm.level2Cycles++
 			if sm.level2Cycles >= maxLevel2Cycles {
 				return StateDisarmed

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"alarm-service/internal/fsm"
@@ -33,18 +35,41 @@ type motionEvent struct {
 	Engine    string `json:"engine,omitempty"`
 }
 
+// eventSink is the part of fsm.StateMachine the subscriber uses. Extracted so
+// the tamper-input handlers can be exercised without a running FSM.
+type eventSink interface {
+	SendEvent(fsm.Event)
+	State() fsm.State
+}
+
 // Subscriber handles subscribing to Redis channels using HashWatcher
 type Subscriber struct {
 	vehicleWatcher           *ipc.HashWatcher
 	settingsWatcher          *ipc.HashWatcher
 	powerManagerWatcher      *ipc.HashWatcher
 	motionWatcher            *ipc.Subscription[string]
+	buttonsWatcher           *ipc.Subscription[string]
 	ipc                      *ipc.Client
 	log                      *slog.Logger
-	sm                       *fsm.StateMachine
+	sm                       eventSink
 	seatboxTriggerEnabled    bool
 	authorizedSeatboxPending bool
 	lastSeatboxCloseAt       time.Time
+
+	// Per-source trigger flags. Rejected events are dropped here rather than
+	// in the FSM, so an opted-out source costs nothing downstream. Atomic
+	// because the settings watcher writes them from its own goroutine while
+	// the vehicle watcher and the buttons subscription read them from theirs.
+	buttonsTriggerEnabled   atomic.Bool
+	handlebarTriggerEnabled atomic.Bool
+
+	// Last seen values of the handlebar tamper fields, used to tell a real
+	// safe-to-unsafe transition from StartWithSync delivering the value that
+	// was already there. Plenty of scooters park with the handlebar lock never
+	// engaged, so "unlocked" is a legitimate resting value and must not fire
+	// the alarm on every service restart.
+	handlebarLockLast     string
+	handlebarPositionLast string
 }
 
 // NewSubscriber creates a new Subscriber with HashWatcher instances
@@ -58,6 +83,10 @@ func NewSubscriber(client *Client, sm *fsm.StateMachine, log *slog.Logger) *Subs
 		sm:                    sm,
 		seatboxTriggerEnabled: true, // default: seatbox opening can trigger alarm
 	}
+
+	// default: brake/horn/seatbox buttons and handlebar sensors can trigger alarm
+	s.buttonsTriggerEnabled.Store(true)
+	s.handlebarTriggerEnabled.Store(true)
 
 	s.setupVehicleWatcher()
 	s.setupSettingsWatcher()
@@ -129,6 +158,54 @@ func (s *Subscriber) setupVehicleWatcher() {
 		}
 		return nil
 	})
+
+	s.vehicleWatcher.OnField("handlebar:lock-sensor", s.handleHandlebarLockField)
+	s.vehicleWatcher.OnField("handlebar:position", s.handleHandlebarPositionField)
+}
+
+// handleHandlebarLockField emits a trigger only for a locked-to-unlocked
+// transition seen after the baseline value has been captured. See the
+// handlebarLockLast comment for why the baseline matters.
+func (s *Subscriber) handleHandlebarLockField(lockState string) error {
+	prev := s.handlebarLockLast
+	s.handlebarLockLast = lockState
+	if prev == "" {
+		s.log.Debug("handlebar lock baseline captured", "state", lockState)
+		return nil
+	}
+	if lockState != "unlocked" || prev == "unlocked" {
+		return nil
+	}
+	if !s.handlebarTriggerEnabled.Load() {
+		s.log.Debug("handlebar unlocked transition ignored, handlebar trigger disabled")
+		return nil
+	}
+	s.log.Info("handlebar lock went unlocked, sending input trigger", "prev", prev)
+	s.sm.SendEvent(fsm.InputTriggerEvent{Source: fsm.TriggerSourceHandlebarLock})
+	return nil
+}
+
+// handleHandlebarPositionField is the position-sensor counterpart of
+// handleHandlebarLockField. Only on-place to off-place counts, and only after
+// the baseline: a rider who parked with the bars turned leaves "off-place" as
+// the resting value.
+func (s *Subscriber) handleHandlebarPositionField(position string) error {
+	prev := s.handlebarPositionLast
+	s.handlebarPositionLast = position
+	if prev == "" {
+		s.log.Debug("handlebar position baseline captured", "position", position)
+		return nil
+	}
+	if position != "off-place" || prev == "off-place" {
+		return nil
+	}
+	if !s.handlebarTriggerEnabled.Load() {
+		s.log.Debug("handlebar off-place transition ignored, handlebar trigger disabled")
+		return nil
+	}
+	s.log.Info("handlebar moved off-place, sending input trigger", "prev", prev)
+	s.sm.SendEvent(fsm.InputTriggerEvent{Source: fsm.TriggerSourceHandlebarPosition})
+	return nil
 }
 
 // setupSettingsWatcher registers handlers for alarm settings changes
@@ -203,6 +280,27 @@ func (s *Subscriber) setupSettingsWatcher() {
 		s.sm.SendEvent(fsm.L1CooldownDurationChangedEvent{Duration: duration})
 		return nil
 	})
+
+	s.settingsWatcher.OnField("alarm.trigger.motion", func(motionTrigger string) error {
+		enabled := motionTrigger == "true"
+		s.log.Info("trigger.motion setting changed", "enabled", enabled)
+		s.sm.SendEvent(fsm.MotionTriggerSettingChangedEvent{Enabled: enabled})
+		return nil
+	})
+
+	s.settingsWatcher.OnField("alarm.trigger.buttons", func(buttonsTrigger string) error {
+		enabled := buttonsTrigger == "true"
+		s.log.Info("trigger.buttons setting changed", "enabled", enabled)
+		s.buttonsTriggerEnabled.Store(enabled)
+		return nil
+	})
+
+	s.settingsWatcher.OnField("alarm.trigger.handlebar", func(handlebarTrigger string) error {
+		enabled := handlebarTrigger == "true"
+		s.log.Info("trigger.handlebar setting changed", "enabled", enabled)
+		s.handlebarTriggerEnabled.Store(enabled)
+		return nil
+	})
 }
 
 // setupPowerManagerWatcher reacts to pm-service publishing its current power-manager
@@ -257,7 +355,66 @@ func (s *Subscriber) Start() error {
 		return fmt.Errorf("failed to subscribe to motion:interrupt: %w", err)
 	}
 
+	s.log.Info("subscribing to buttons")
+	s.buttonsWatcher, err = ipc.Subscribe(s.ipc, "buttons", s.handleButtonEvent)
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to buttons: %w", err)
+	}
+
 	return nil
+}
+
+// handleButtonEvent turns a `buttons` payload into a tamper trigger. Only the
+// pressed edge counts; releases are ignored so a single press produces one
+// trigger.
+func (s *Subscriber) handleButtonEvent(payload string) error {
+	source, edge, ok := parseButtonPayload(payload)
+	if !ok {
+		s.log.Debug("unrecognized button payload", "payload", payload)
+		return nil
+	}
+	if edge != "on" {
+		return nil
+	}
+	if !s.buttonsTriggerEnabled.Load() {
+		s.log.Debug("button press ignored, buttons trigger disabled", "source", source.String())
+		return nil
+	}
+	s.log.Info("button pressed, sending input trigger", "source", source.String())
+	s.sm.SendEvent(fsm.InputTriggerEvent{Source: source})
+	return nil
+}
+
+// parseButtonPayload recognizes the `buttons` payloads that count as tampering.
+// vehicle-service publishes "horn:on", "seatbox:on", "brake:left:on" and their
+// off counterparts on this channel, plus blinker edges. Blinkers are navigation
+// signals rather than tampering, so they fall through as unrecognized.
+//
+// Throttle never appears here. It only exists as an ECU CAN payload and the ECU
+// is powered down in Standby, so it cannot be a trigger source.
+func parseButtonPayload(payload string) (fsm.TriggerSource, string, bool) {
+	parts := strings.Split(payload, ":")
+	switch len(parts) {
+	case 2:
+		edge := parts[1]
+		switch parts[0] {
+		case "seatbox":
+			return fsm.TriggerSourceSeatboxButton, edge, true
+		case "horn":
+			return fsm.TriggerSourceHornButton, edge, true
+		}
+	case 3:
+		if parts[0] == "brake" {
+			edge := parts[2]
+			switch parts[1] {
+			case "left":
+				return fsm.TriggerSourceBrakeLeft, edge, true
+			case "right":
+				return fsm.TriggerSourceBrakeRight, edge, true
+			}
+		}
+	}
+	return fsm.TriggerSourceUnknown, "", false
 }
 
 // Stop stops all watchers
@@ -274,6 +431,11 @@ func (s *Subscriber) Stop() {
 	if s.motionWatcher != nil {
 		if err := s.motionWatcher.Unsubscribe(); err != nil {
 			s.log.Warn("failed to unsubscribe motion watcher", "error", err)
+		}
+	}
+	if s.buttonsWatcher != nil {
+		if err := s.buttonsWatcher.Unsubscribe(); err != nil {
+			s.log.Warn("failed to unsubscribe buttons watcher", "error", err)
 		}
 	}
 }
