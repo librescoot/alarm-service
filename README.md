@@ -73,7 +73,7 @@ Flags:
 - `HGET settings alarm.seatbox-trigger` - Unauthorized seatbox opening triggers the alarm (true/false)
 - `HGET settings alarm.trigger.motion` - Motion is a trigger source (true/false, default true)
 - `HGET settings alarm.trigger.buttons` - Brake/horn/seatbox button presses are a trigger source (true/false, default true)
-- `HGET settings alarm.trigger.handlebar` - Handlebar lock sensor and position are a trigger source (true/false, default true)
+- `HGET settings alarm.trigger.handlebar` - Handlebar lock sensor and position are a trigger source (true/false, default false)
 
 ### Trigger Sources
 
@@ -99,6 +99,8 @@ rider who still has to swing the bars into place, and either can bounce the
 lock sensor or move the position sensor while the alarm is already armed. The
 window restarts on every arm, and edges inside it are dropped rather than
 replayed afterwards. Motion, buttons and the seatbox are not muted.
+Handlebar also ships off by default until the window has been tested on a
+vehicle.
 
 Buttons and handlebar events are filtered in the subscriber, so a source that
 is switched off costs the state machine nothing. Motion is filtered in the
