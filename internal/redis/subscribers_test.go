@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"alarm-service/internal/fsm"
 )
@@ -12,12 +13,25 @@ import (
 // fakeEventSink records what the subscriber emits without needing a running
 // state machine. Implements the package-private eventSink interface.
 type fakeEventSink struct {
+	mu     sync.Mutex
 	events []fsm.Event
 	state  fsm.State
 }
 
-func (f *fakeEventSink) SendEvent(e fsm.Event) { f.events = append(f.events, e) }
-func (f *fakeEventSink) State() fsm.State      { return f.state }
+func (f *fakeEventSink) SendEvent(e fsm.Event) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, e)
+}
+func (f *fakeEventSink) State() fsm.State { return f.state }
+
+// snapshot copies the recorded events. The handlebar dwell timer fires on its
+// own goroutine, so tests must not read the slice directly.
+func (f *fakeEventSink) snapshot() []fsm.Event {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fsm.Event(nil), f.events...)
+}
 
 // newTestSubscriber populates only the fields the tamper-input handlers touch,
 // which is enough to exercise the baseline and transition logic without Redis.
@@ -30,8 +44,16 @@ func newTestSubscriber() (*Subscriber, *fakeEventSink) {
 	s.seatboxTriggerEnabled.Store(true)
 	s.buttonsTriggerEnabled.Store(true)
 	s.handlebarTriggerEnabled.Store(true)
+	s.handlebarPositionDwell = testDwell
 	return s, sink
 }
+
+// testDwell keeps the dwell-timer tests fast while staying long enough that a
+// scheduling hiccup on a loaded machine does not read as a real expiry.
+const testDwell = 30 * time.Millisecond
+
+// pastDwell waits comfortably beyond testDwell so a pending timer has fired.
+func pastDwell() { time.Sleep(4 * testDwell) }
 
 // parseButtonPayload has to accept the payloads vehicle-service publishes on
 // the `buttons` channel and map them to the right TriggerSource. Anything else
@@ -217,21 +239,104 @@ func TestHandlebarPosition_OffPlaceBaselineNoTrigger(t *testing.T) {
 	}
 }
 
-func TestHandlebarPosition_OnPlaceToOffPlaceTriggers(t *testing.T) {
+// The bars leaving on-place starts the dwell timer; it must not emit anything
+// until the timer expires. This is what stops a gust that nudges the bars for a
+// few hundred milliseconds from honking the horn.
+func TestHandlebarPosition_NoTriggerBeforeDwellExpires(t *testing.T) {
 	s, sink := newTestSubscriber()
 
 	_ = s.handleHandlebarPositionField("on-place") // baseline
 	_ = s.handleHandlebarPositionField("off-place")
 
-	if len(sink.events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(sink.events))
+	if evs := sink.snapshot(); len(evs) != 0 {
+		t.Fatalf("expected no events before dwell expires, got %v", evs)
 	}
-	ev, ok := sink.events[0].(fsm.InputTriggerEvent)
+}
+
+func TestHandlebarPosition_OnPlaceToOffPlaceTriggers(t *testing.T) {
+	s, sink := newTestSubscriber()
+
+	_ = s.handleHandlebarPositionField("on-place") // baseline
+	_ = s.handleHandlebarPositionField("off-place")
+	pastDwell()
+
+	evs := sink.snapshot()
+	if len(evs) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(evs))
+	}
+	ev, ok := evs[0].(fsm.InputTriggerEvent)
 	if !ok {
-		t.Fatalf("expected InputTriggerEvent, got %T", sink.events[0])
+		t.Fatalf("expected InputTriggerEvent, got %T", evs[0])
 	}
 	if ev.Source != fsm.TriggerSourceHandlebarPosition {
 		t.Errorf("wrong source: %s", ev.Source)
+	}
+}
+
+// The bug this whole change exists for: on 2026-08-25 the sensor reported
+// off-place and back inside ~1s while the steering lock was engaged, and the
+// alarm honked. Returning to on-place must cancel the pending trigger.
+func TestHandlebarPosition_ReturnWithinDwellSuppresses(t *testing.T) {
+	s, sink := newTestSubscriber()
+
+	_ = s.handleHandlebarPositionField("on-place") // baseline
+	_ = s.handleHandlebarPositionField("off-place")
+	_ = s.handleHandlebarPositionField("on-place")
+	pastDwell()
+
+	if evs := sink.snapshot(); len(evs) != 0 {
+		t.Fatalf("expected the excursion to be suppressed, got %v", evs)
+	}
+}
+
+// A chattering sensor restarts the dwell on every off-place edge, so it never
+// accumulates a full quiet window and never fires.
+func TestHandlebarPosition_ChatterNeverTriggers(t *testing.T) {
+	s, sink := newTestSubscriber()
+
+	_ = s.handleHandlebarPositionField("on-place") // baseline
+	for i := 0; i < 5; i++ {
+		_ = s.handleHandlebarPositionField("off-place")
+		time.Sleep(testDwell / 4)
+		_ = s.handleHandlebarPositionField("on-place")
+		time.Sleep(testDwell / 4)
+	}
+	pastDwell()
+
+	if evs := sink.snapshot(); len(evs) != 0 {
+		t.Fatalf("expected chatter to be suppressed, got %v", evs)
+	}
+}
+
+// A second excursion after a suppressed one still has to arm the alarm. The
+// cancel path must not latch the source off.
+func TestHandlebarPosition_TriggersAfterEarlierSuppression(t *testing.T) {
+	s, sink := newTestSubscriber()
+
+	_ = s.handleHandlebarPositionField("on-place") // baseline
+	_ = s.handleHandlebarPositionField("off-place")
+	_ = s.handleHandlebarPositionField("on-place") // suppressed excursion
+	pastDwell()
+
+	_ = s.handleHandlebarPositionField("off-place") // real one, held
+	pastDwell()
+
+	if evs := sink.snapshot(); len(evs) != 1 {
+		t.Fatalf("expected 1 event from the held excursion, got %v", evs)
+	}
+}
+
+// Staying off-place fires once, not once per redundant off-place publish.
+func TestHandlebarPosition_HeldOffPlaceTriggersOnce(t *testing.T) {
+	s, sink := newTestSubscriber()
+
+	_ = s.handleHandlebarPositionField("on-place") // baseline
+	_ = s.handleHandlebarPositionField("off-place")
+	_ = s.handleHandlebarPositionField("off-place")
+	pastDwell()
+
+	if evs := sink.snapshot(); len(evs) != 1 {
+		t.Fatalf("expected exactly 1 event, got %v", evs)
 	}
 }
 
@@ -241,9 +346,10 @@ func TestHandlebarPosition_FlagDisabledSuppresses(t *testing.T) {
 
 	_ = s.handleHandlebarPositionField("on-place")
 	_ = s.handleHandlebarPositionField("off-place")
+	pastDwell()
 
-	if len(sink.events) != 0 {
-		t.Fatalf("expected no events when handlebar disabled, got %v", sink.events)
+	if evs := sink.snapshot(); len(evs) != 0 {
+		t.Fatalf("expected no events when handlebar disabled, got %v", evs)
 	}
 }
 

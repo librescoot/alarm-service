@@ -106,6 +106,16 @@ replayed afterwards. Motion, buttons and the seatbox are not muted.
 Handlebar also ships off by default until the window has been tested on a
 vehicle.
 
+The position sensor has a third guard: a dwell time. The bars must stay
+off-place for a full second before that counts as tampering, and returning
+on-place cancels the pending trigger. The position and lock sensors are
+independent and can be subtly misaligned, so the lock pin engages while the
+bars rest at the edge of the position sensor's on-place zone, and from there
+wind or vibration flips the reading across the threshold. A real tamper leaves
+the bars off-place, so the only cost is delaying the alarm by the dwell. Suppressed excursions are logged with how long they lasted
+(`off_place_ms`), so the constant can be retuned against what the sensor
+actually does. The lock sensor has no dwell: an unlock is unambiguous.
+
 Buttons and handlebar events are filtered in the subscriber, so a source that
 is switched off costs the state machine nothing. Motion is filtered in the
 state machine instead, because motion events also carry the
@@ -129,6 +139,13 @@ ECU, and the ECU is powered down in Standby.
 ### Published Status
 
 - `HGET alarm status` - Current alarm status (disabled, disarmed, armed, level-1-triggered, level-2-triggered)
+- `HGET alarm trigger:source` - What set the alarm off last: `motion`, `seatbox`, `handlebar_position`, `handlebar_lock`, `brake_left`, `brake_right`, `horn_button`, `seatbox_button`
+- `HGET alarm trigger:timestamp` - When that happened (RFC3339 UTC)
+
+Only a trigger that actually moved the state machine is recorded. An event
+dropped by the settling window, the position dwell or a disabled source never
+claims the field. Neither field is cleared on disarm: the last trigger stays
+readable after the scooter is unlocked and is replaced by the next real one.
 
 ### Commands Sent
 

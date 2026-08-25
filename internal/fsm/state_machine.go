@@ -130,6 +130,7 @@ type MotionRPC interface {
 // StatusPublisher interface for publishing alarm status
 type StatusPublisher interface {
 	PublishStatus(status string) error
+	PublishTrigger(source string, at time.Time) error
 }
 
 // SuspendInhibitor interface for managing wake locks
@@ -198,6 +199,22 @@ func isTamperTrigger(e Event) bool {
 		return true
 	}
 	return false
+}
+
+// triggerSourceOf names the input behind an event for the alarm hash, so a
+// later `hgetall alarm` can say what set the alarm off. Deliberately separate
+// from isTamperTrigger, which excludes the seatbox because it gates the L1
+// hazard blink rather than provenance.
+func triggerSourceOf(e Event) (string, bool) {
+	switch ev := e.(type) {
+	case InputTriggerEvent:
+		return ev.Source.String(), true
+	case BMXInterruptEvent:
+		return "motion", true
+	case UnauthorizedSeatboxEvent:
+		return "seatbox", true
+	}
+	return "", false
 }
 
 // Run runs the state machine event loop
@@ -378,7 +395,25 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 			"to", newState.String(),
 			"event", event.Type())
 		sm.enterState(ctx, newState)
+		// Published before the status so anything woken by the status change
+		// already sees the matching source. Only events that actually moved
+		// the FSM get here: a trigger dropped by the settling window, a
+		// disabled source or the position dwell never claims the field.
+		sm.publishTriggerSource(event)
 		sm.publishCurrentStatus()
+	}
+}
+
+// publishTriggerSource records what caused a transition, when the event names
+// an input at all. Never cleared: the last trigger stays readable after the
+// vehicle is unlocked and is only replaced by the next real one.
+func (sm *StateMachine) publishTriggerSource(event Event) {
+	source, ok := triggerSourceOf(event)
+	if !ok {
+		return
+	}
+	if err := sm.publisher.PublishTrigger(source, time.Now()); err != nil {
+		sm.log.Error("failed to publish trigger source", "source", source, "error", err)
 	}
 }
 

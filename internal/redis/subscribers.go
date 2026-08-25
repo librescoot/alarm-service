@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -22,6 +23,22 @@ import (
 // seatbox:opened first, which sets authorizedSeatboxPending and bypasses the
 // bounce check entirely.
 const seatboxBounceWindow = 500 * time.Millisecond
+
+// defaultHandlebarPositionDwell is how long the bars must stay off-place before
+// that counts as tampering. The position sensor and the lock sensor are
+// independent and can sit slightly out of alignment, so the lock pin engages
+// while the bars rest at the edge of the position sensor's on-place zone. From
+// there, wind or vibration is enough to flip the reading across the threshold:
+// on 2026-08-25 a parked vehicle reported off-place and back inside ~1s and
+// honked the horn twice, twice in five minutes. A real tamper leaves the bars
+// off-place, so the only cost here is delaying the alarm by this much.
+// Suppressed excursions are logged with their duration so the value can be
+// retuned against real data rather than guessed at again.
+//
+// Deliberately not gated on handlebar:lock-state reading unlocked. A forced or
+// broken lock pin can leave that sensor reading locked while the bars turn
+// freely, which is a theft signature, not a reason to stop watching.
+const defaultHandlebarPositionDwell = 1 * time.Second
 
 // motionEvent mirrors motion-service's MotionEvent JSON envelope. Kept
 // minimal to avoid a hard dependency on the motion-service repo. The Type
@@ -70,6 +87,17 @@ type Subscriber struct {
 	// the alarm on every service restart.
 	handlebarLockLast     string
 	handlebarPositionLast string
+
+	// Dwell state for the position sensor. handlebarDwellMu guards all three:
+	// the timer callback runs on its own goroutine while the vehicle watcher
+	// drives the edges from another. handlebarDwellGen invalidates a timer that
+	// already fired by the time we tried to stop it, which Timer.Stop alone
+	// cannot express.
+	handlebarDwellMu       sync.Mutex
+	handlebarDwellTimer    *time.Timer
+	handlebarDwellGen      uint64
+	handlebarOffPlaceSince time.Time
+	handlebarPositionDwell time.Duration
 }
 
 // NewSubscriber creates a new Subscriber with HashWatcher instances
@@ -88,6 +116,7 @@ func NewSubscriber(client *Client, sm *fsm.StateMachine, log *slog.Logger) *Subs
 	s.seatboxTriggerEnabled.Store(true)
 	s.buttonsTriggerEnabled.Store(true)
 	s.handlebarTriggerEnabled.Store(false)
+	s.handlebarPositionDwell = defaultHandlebarPositionDwell
 
 	s.setupVehicleWatcher()
 	s.setupSettingsWatcher()
@@ -201,16 +230,83 @@ func (s *Subscriber) handleHandlebarPositionField(position string) error {
 		s.log.Debug("handlebar position baseline captured", "position", position)
 		return nil
 	}
-	if position != "off-place" || prev == "off-place" {
+	if position != "off-place" {
+		// Back on-place. Anything pending was a brief excursion, not tampering.
+		s.cancelHandlebarDwell()
+		return nil
+	}
+	if prev == "off-place" {
 		return nil
 	}
 	if !s.handlebarTriggerEnabled.Load() {
 		s.log.Debug("handlebar off-place transition ignored, handlebar trigger disabled")
 		return nil
 	}
-	s.log.Info("handlebar moved off-place, sending input trigger", "prev", prev)
-	s.sm.SendEvent(fsm.InputTriggerEvent{Source: fsm.TriggerSourceHandlebarPosition})
+	s.startHandlebarDwell(prev)
 	return nil
+}
+
+// startHandlebarDwell begins the window the bars must stay off-place for. A
+// fresh off-place edge restarts it, so a chattering sensor never accumulates a
+// full window.
+func (s *Subscriber) startHandlebarDwell(prev string) {
+	s.handlebarDwellMu.Lock()
+	defer s.handlebarDwellMu.Unlock()
+
+	if s.handlebarDwellTimer != nil {
+		s.handlebarDwellTimer.Stop()
+	}
+	s.handlebarDwellGen++
+	gen := s.handlebarDwellGen
+	s.handlebarOffPlaceSince = time.Now()
+
+	dwell := s.handlebarPositionDwell
+	s.log.Debug("handlebar moved off-place, starting dwell", "prev", prev, "dwell", dwell)
+	s.handlebarDwellTimer = time.AfterFunc(dwell, func() { s.fireHandlebarDwell(gen) })
+}
+
+// cancelHandlebarDwell drops a pending trigger because the bars came back. The
+// duration is logged so the dwell constant can be retuned against what the
+// sensor and the weather actually do, rather than guessed at a second time.
+func (s *Subscriber) cancelHandlebarDwell() {
+	s.handlebarDwellMu.Lock()
+	defer s.handlebarDwellMu.Unlock()
+
+	if s.handlebarDwellTimer == nil {
+		return
+	}
+	s.handlebarDwellTimer.Stop()
+	s.handlebarDwellTimer = nil
+	// Invalidate a timer that already fired and is blocked on this mutex;
+	// Timer.Stop cannot report that case on its own.
+	s.handlebarDwellGen++
+	s.log.Info("handlebar off-place returned within dwell, ignored",
+		"off_place_ms", time.Since(s.handlebarOffPlaceSince).Milliseconds())
+}
+
+// fireHandlebarDwell emits the trigger once the bars have stayed off-place for
+// the whole window. gen guards against a cancelled-but-already-fired timer.
+func (s *Subscriber) fireHandlebarDwell(gen uint64) {
+	s.handlebarDwellMu.Lock()
+	if gen != s.handlebarDwellGen {
+		s.handlebarDwellMu.Unlock()
+		return
+	}
+	s.handlebarDwellTimer = nil
+	held := time.Since(s.handlebarOffPlaceSince)
+	s.handlebarDwellMu.Unlock()
+
+	// Re-checked here and not just at the edge: the setting is the kill switch
+	// for a misbehaving sensor, so a timer armed before it was flipped off must
+	// not still honk the horn a second later.
+	if !s.handlebarTriggerEnabled.Load() {
+		s.log.Debug("handlebar dwell expired but trigger disabled meanwhile")
+		return
+	}
+
+	s.log.Info("handlebar held off-place past dwell, sending input trigger",
+		"off_place_ms", held.Milliseconds())
+	s.sm.SendEvent(fsm.InputTriggerEvent{Source: fsm.TriggerSourceHandlebarPosition})
 }
 
 // setupSettingsWatcher registers handlers for alarm settings changes
@@ -424,6 +520,7 @@ func parseButtonPayload(payload string) (fsm.TriggerSource, string, bool) {
 
 // Stop stops all watchers
 func (s *Subscriber) Stop() {
+	s.cancelHandlebarDwell()
 	if err := s.vehicleWatcher.Stop(); err != nil {
 		s.log.Warn("failed to stop vehicle watcher", "error", err)
 	}

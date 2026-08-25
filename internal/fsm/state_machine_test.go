@@ -20,11 +20,21 @@ func (m *mockMotionRPC) PrepareHibernation(ctx context.Context) error {
 }
 
 type mockStatusPublisher struct {
-	lastStatus string
+	lastStatus        string
+	lastTriggerSource string
+	lastTriggerAt     time.Time
+	triggerCalls      int
 }
 
 func (m *mockStatusPublisher) PublishStatus(status string) error {
 	m.lastStatus = status
+	return nil
+}
+
+func (m *mockStatusPublisher) PublishTrigger(source string, at time.Time) error {
+	m.lastTriggerSource = source
+	m.lastTriggerAt = at
+	m.triggerCalls++
 	return nil
 }
 
@@ -227,6 +237,87 @@ func TestStateMachine_ArmedToTriggerLevel1Wait(t *testing.T) {
 
 	if alarm.blinkCalled != 1 {
 		t.Errorf("expected hazards to blink once, got %d blinks", alarm.blinkCalled)
+	}
+}
+
+// The alarm hash has to say what set it off, so the dashboard and a later
+// `hgetall alarm` can answer that without trawling the journal. Each trigger
+// source maps to a stable name.
+func TestStateMachine_PublishesTriggerSource(t *testing.T) {
+	cases := []struct {
+		name  string
+		event Event
+		want  string
+	}{
+		{"handlebar position", InputTriggerEvent{Source: TriggerSourceHandlebarPosition}, "handlebar_position"},
+		{"handlebar lock", InputTriggerEvent{Source: TriggerSourceHandlebarLock}, "handlebar_lock"},
+		{"brake", InputTriggerEvent{Source: TriggerSourceBrakeLeft}, "brake_left"},
+		{"motion", BMXInterruptEvent{}, "motion"},
+		{"seatbox", UnauthorizedSeatboxEvent{}, "seatbox"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sm, _, pub, _, _ := createTestStateMachine()
+			ctx := context.Background()
+
+			sm.state = StateArmed
+			sm.alarmEnabled = true
+			sm.vehicleStandby = true
+			sm.handlebarSettled = true
+
+			before := time.Now()
+			sm.handleEvent(ctx, tc.event)
+
+			if pub.lastTriggerSource != tc.want {
+				t.Errorf("expected trigger source %q, got %q", tc.want, pub.lastTriggerSource)
+			}
+			if pub.lastTriggerAt.Before(before) {
+				t.Errorf("expected a trigger timestamp at or after %v, got %v", before, pub.lastTriggerAt)
+			}
+		})
+	}
+}
+
+// A trigger that gets dropped never sounded the alarm, so it must not claim
+// the field. The post-arm settling window is the case that matters: the
+// vehicle working its own handlebar lock would otherwise show up as the reason
+// the alarm went off.
+func TestStateMachine_DroppedTriggerPublishesNoSource(t *testing.T) {
+	sm, _, pub, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.handlebarSettled = false // still inside the settling window
+
+	sm.handleEvent(ctx, InputTriggerEvent{Source: TriggerSourceHandlebarPosition})
+
+	if pub.triggerCalls != 0 {
+		t.Errorf("expected no trigger publish for a dropped event, got %d", pub.triggerCalls)
+	}
+}
+
+// Forensics beat tidiness: the last trigger stays readable after the scooter
+// is unlocked, and is only replaced by the next real one.
+func TestStateMachine_TriggerSourcePersistsAfterDisarm(t *testing.T) {
+	sm, _, pub, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.handlebarSettled = true
+
+	sm.handleEvent(ctx, InputTriggerEvent{Source: TriggerSourceHandlebarPosition})
+	sm.handleEvent(ctx, VehicleStateChangedEvent{State: VehicleStateParked})
+
+	if sm.State() == StateTriggerLevel1Wait {
+		t.Fatal("precondition failed: expected the vehicle change to leave the trigger state")
+	}
+	if pub.lastTriggerSource != "handlebar_position" {
+		t.Errorf("expected the last trigger to survive disarm, got %q", pub.lastTriggerSource)
 	}
 }
 
