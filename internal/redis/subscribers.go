@@ -28,10 +28,10 @@ const seatboxBounceWindow = 500 * time.Millisecond
 // that counts as tampering. The position sensor and the lock sensor are
 // independent and can sit slightly out of alignment, so the lock pin engages
 // while the bars rest at the edge of the position sensor's on-place zone. From
-// there, wind or vibration is enough to flip the reading across the threshold:
-// on 2026-08-25 a parked vehicle reported off-place and back inside ~1s and
-// honked the horn twice, twice in five minutes. A real tamper leaves the bars
-// off-place, so the only cost here is delaying the alarm by this much.
+// there, wind or vibration is enough to flip the reading across the threshold,
+// which is indistinguishable from a turn until it persists. A real tamper
+// leaves the bars off-place, so the only cost here is delaying the alarm by
+// this much.
 // Suppressed excursions are logged with their duration so the value can be
 // retuned against real data rather than guessed at again.
 //
