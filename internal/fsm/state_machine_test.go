@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// Mock implementations for testing
 type mockMotionRPC struct {
 	prepareCalls int
 	prepareErr   error
@@ -240,9 +239,6 @@ func TestStateMachine_ArmedToTriggerLevel1Wait(t *testing.T) {
 	}
 }
 
-// The alarm hash has to say what set it off, so the dashboard and a later
-// `hgetall alarm` can answer that without trawling the journal. Each trigger
-// source maps to a stable name.
 func TestStateMachine_PublishesTriggerSource(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -279,10 +275,6 @@ func TestStateMachine_PublishesTriggerSource(t *testing.T) {
 	}
 }
 
-// A trigger that gets dropped never sounded the alarm, so it must not claim
-// the field. The post-arm settling window is the case that matters: the
-// vehicle working its own handlebar lock would otherwise show up as the reason
-// the alarm went off.
 func TestStateMachine_DroppedTriggerPublishesNoSource(t *testing.T) {
 	sm, _, pub, _, _ := createTestStateMachine()
 	ctx := context.Background()
@@ -290,7 +282,7 @@ func TestStateMachine_DroppedTriggerPublishesNoSource(t *testing.T) {
 	sm.state = StateArmed
 	sm.alarmEnabled = true
 	sm.vehicleStandby = true
-	sm.handlebarSettled = false // still inside the settling window
+	sm.handlebarSettled = false
 
 	sm.handleEvent(ctx, InputTriggerEvent{Source: TriggerSourceHandlebarPosition})
 
@@ -299,8 +291,6 @@ func TestStateMachine_DroppedTriggerPublishesNoSource(t *testing.T) {
 	}
 }
 
-// Forensics beat tidiness: the last trigger stays readable after the scooter
-// is unlocked, and is only replaced by the next real one.
 func TestStateMachine_TriggerSourcePersistsAfterDisarm(t *testing.T) {
 	sm, _, pub, _, _ := createTestStateMachine()
 	ctx := context.Background()
@@ -780,7 +770,7 @@ func TestStateMachine_SeatboxAccessToDelayArmed(t *testing.T) {
 }
 
 func TestStateMachine_RuntimeDisarmFromArmedStates(t *testing.T) {
-	// statesWithAlarm: alarm controller is running in these states (exit handler calls Stop)
+
 	statesWithAlarm := map[State]bool{
 		StateTriggerLevel1Wait: true,
 		StateTriggerLevel2:     true,
@@ -837,7 +827,6 @@ func TestStateMachine_RuntimeDisarmPreservesAlarmEnabled(t *testing.T) {
 		t.Errorf("expected StateDisarmed, got %s", sm.State())
 	}
 
-	// alarmEnabled must not be touched — re-arm on next standby should work
 	if !sm.alarmEnabled {
 		t.Error("alarmEnabled must remain true after runtime disarm")
 	}
@@ -858,7 +847,6 @@ func TestStateMachine_RuntimeDisarmThenRearmOnStandby(t *testing.T) {
 		t.Fatalf("expected StateDisarmed, got %s", sm.State())
 	}
 
-	// Simulate scooter going active then returning to standby
 	sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateReadyToDrive})
 	sm.handleEvent(ctx, <-sm.events)
 	sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateStandby})
@@ -875,7 +863,7 @@ func TestStateMachine_RuntimeArmFromDisarmed(t *testing.T) {
 
 	sm.state = StateDisarmed
 	sm.alarmEnabled = true
-	sm.vehicleStandby = false // not in standby — arm forced anyway
+	sm.vehicleStandby = false
 
 	sm.SendEvent(RuntimeArmEvent{})
 	sm.handleEvent(ctx, <-sm.events)
@@ -1072,8 +1060,6 @@ func TestStateMachine_HibernationImminentBeforeArmedAppliesOnEntry(t *testing.T)
 	}
 }
 
-// User-intervention disarm (vehicle leaves stand-by) must clear
-// wakeFromHibernation — the wake intent no longer applies.
 func TestStateMachine_UserDisarmClearsWakeFromHibernation(t *testing.T) {
 	sm, _, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
@@ -1094,9 +1080,6 @@ func TestStateMachine_UserDisarmClearsWakeFromHibernation(t *testing.T) {
 	}
 }
 
-// L2 exhaustion lands in Disarmed (preserving the "shut up" safety valve), but
-// with the vehicle still in stand-by the FSM keeps wakeFromHibernation around
-// so the post-alarm cooldown can decide between re-hibernate and re-arm.
 func TestStateMachine_L2ExhaustionPreservesWakeFromHibernationInDisarmed(t *testing.T) {
 	sm, _, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
@@ -1118,10 +1101,6 @@ func TestStateMachine_L2ExhaustionPreservesWakeFromHibernationInDisarmed(t *test
 	}
 }
 
-// After the post-alarm cooldown elapses with wakeFromHibernation set, transition
-// into StateArmed (so the BMX is configured for motion detection) and then
-// request re-hibernate. Going through Armed is required: nRF52 needs the BMX
-// armed to wake the system again on motion after hibernation.
 func TestStateMachine_PostAlarmCooldownRequestsHibernateWhenWakeFlag(t *testing.T) {
 	sm, _, _, _, _, power := createTestStateMachineWithPower()
 	ctx := context.Background()
@@ -1145,8 +1124,6 @@ func TestStateMachine_PostAlarmCooldownRequestsHibernateWhenWakeFlag(t *testing.
 	}
 }
 
-// After the post-alarm cooldown elapses without a wake-from-hibernation flag,
-// re-arm normally so a thief can't simply wait out the silence.
 func TestStateMachine_PostAlarmCooldownRearmsWhenNoWakeFlag(t *testing.T) {
 	sm, _, _, _, _, power := createTestStateMachineWithPower()
 	ctx := context.Background()
@@ -1167,8 +1144,6 @@ func TestStateMachine_PostAlarmCooldownRearmsWhenNoWakeFlag(t *testing.T) {
 	}
 }
 
-// User intervention during the post-alarm cooldown (alarm disabled) must short-circuit
-// the cooldown — no hibernate, no re-arm.
 func TestStateMachine_PostAlarmCooldownIgnoredWhenAlarmDisabled(t *testing.T) {
 	sm, _, _, _, _, power := createTestStateMachineWithPower()
 	ctx := context.Background()
@@ -1189,7 +1164,6 @@ func TestStateMachine_PostAlarmCooldownIgnoredWhenAlarmDisabled(t *testing.T) {
 	}
 }
 
-// An input trigger in StateArmed escalates to L1 wait, same as motion.
 func TestStateMachine_ArmedInputTriggerEscalatesToL1Wait(t *testing.T) {
 	sm, _, _, inh, alarm := createTestStateMachine()
 	ctx := context.Background()
@@ -1212,8 +1186,6 @@ func TestStateMachine_ArmedInputTriggerEscalatesToL1Wait(t *testing.T) {
 	}
 }
 
-// An input trigger in StateTriggerLevel1 escalates to L2 and blinks hazards,
-// same as motion at that point.
 func TestStateMachine_Level1InputTriggerEscalatesToL2(t *testing.T) {
 	sm, _, _, _, alarm := createTestStateMachine()
 	ctx := context.Background()
@@ -1235,8 +1207,6 @@ func TestStateMachine_Level1InputTriggerEscalatesToL2(t *testing.T) {
 	}
 }
 
-// StateWaitingMovement escalates back to L2 on an input trigger and counts the
-// cycle, same as motion.
 func TestStateMachine_WaitingMovementInputTriggerEscalates(t *testing.T) {
 	sm, _, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
@@ -1255,8 +1225,6 @@ func TestStateMachine_WaitingMovementInputTriggerEscalates(t *testing.T) {
 	}
 }
 
-// alarm.trigger.motion=false drops motion events without a state change while
-// input triggers keep working.
 func TestStateMachine_MotionDisabledDropsMotionKeepsInputs(t *testing.T) {
 	sm, _, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
@@ -1277,8 +1245,6 @@ func TestStateMachine_MotionDisabledDropsMotionKeepsInputs(t *testing.T) {
 	}
 }
 
-// Dropping a motion event must not lose the wake-from-hibernation stamp: the
-// alarm stays quiet but the re-hibernate cooldown still needs to run.
 func TestStateMachine_MotionDisabledKeepsWakeStamp(t *testing.T) {
 	sm, _, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
@@ -1302,8 +1268,6 @@ func TestStateMachine_MotionDisabledKeepsWakeStamp(t *testing.T) {
 	}
 }
 
-// With motion enabled a wake-from-hibernation stamp still escalates to L1 on
-// init, which is the pre-existing behaviour.
 func TestStateMachine_MotionEnabledWakeStampEscalatesOnInit(t *testing.T) {
 	sm, _, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
@@ -1321,7 +1285,6 @@ func TestStateMachine_MotionEnabledWakeStampEscalatesOnInit(t *testing.T) {
 	}
 }
 
-// The settings event updates the flag in place, without a state transition.
 func TestStateMachine_MotionTriggerSettingChange(t *testing.T) {
 	sm, _, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
@@ -1342,8 +1305,6 @@ func TestStateMachine_MotionTriggerSettingChange(t *testing.T) {
 	}
 }
 
-// armForTest drives DelayArmed -> Armed through the real handler so
-// onEnterArmed runs and opens the handlebar settling window.
 func armForTest(t *testing.T, ctx context.Context, sm *StateMachine) {
 	t.Helper()
 
@@ -1359,8 +1320,6 @@ func armForTest(t *testing.T, ctx context.Context, sm *StateMachine) {
 	}
 }
 
-// Both handlebar sources stay muted for the settling window after arming: the
-// vehicle is still working its own lock at that point. Motion is not muted.
 func TestStateMachine_HandlebarTriggersMutedAfterArming(t *testing.T) {
 	sm, _, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
@@ -1391,7 +1350,6 @@ func TestStateMachine_HandlebarTriggersMutedAfterArming(t *testing.T) {
 	}
 }
 
-// The window covers the handlebar only. A button press during it still fires.
 func TestStateMachine_ButtonTriggersIgnoreHandlebarWindow(t *testing.T) {
 	sm, _, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
@@ -1406,7 +1364,6 @@ func TestStateMachine_ButtonTriggersIgnoreHandlebarWindow(t *testing.T) {
 	}
 }
 
-// Once the window elapses, a handlebar edge escalates like any other tamper.
 func TestStateMachine_HandlebarTriggerEscalatesAfterSettling(t *testing.T) {
 	sm, _, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
@@ -1431,8 +1388,6 @@ func TestStateMachine_HandlebarTriggerEscalatesAfterSettling(t *testing.T) {
 	}
 }
 
-// Disarming and rearming opens a fresh window: the next lock cycle produces
-// the same self-inflicted handlebar edges as the first one did.
 func TestStateMachine_HandlebarWindowResetsOnRearm(t *testing.T) {
 	sm, _, _, _, _ := createTestStateMachine()
 	ctx := context.Background()

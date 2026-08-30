@@ -11,20 +11,11 @@ import (
 	ipc "github.com/librescoot/redis-ipc"
 )
 
-// RuntimeCommander handles runtime arm/disarm commands that bypass the settings hash.
 type RuntimeCommander interface {
 	RuntimeArm()
 	RuntimeDisarm()
 }
 
-// Controller manages alarm activation (horn + hazard lights).
-//
-// The controller serializes all writes to scooter:blinker behind a single
-// cancelable pattern goroutine. BlinkHazards (the L1 warning flash) and Start
-// (the full alarm) never run concurrently — a later request supersedes the
-// earlier one, with the prior pattern canceled before the new one writes.
-// Without this, the BlinkHazards goroutine kept toggling both/off while the
-// alarm was driving hazards solid-on, surfacing as visible flicker.
 type Controller struct {
 	ipc         *ipc.Client
 	alarmPub    *ipc.HashPublisher
@@ -38,14 +29,12 @@ type Controller struct {
 	active      bool
 	hornEnabled atomic.Bool
 
-	// blinkerCancel cancels the active blinker pattern goroutine (BlinkHazards
-	// or the alarm's hazard hold). blinkerDone closes when that goroutine exits.
-	// Both are nil when no pattern is running. Guarded by mu.
+	// Exactly one hazard pattern may write at once; cancellation waits so the
+	// next command is final-write-wins rather than visible flicker.
 	blinkerCancel context.CancelFunc
 	blinkerDone   chan struct{}
 }
 
-// NewController creates a new alarm controller using redis-ipc
 func NewController(redisAddr string, hornEnabled bool, log *slog.Logger) (*Controller, error) {
 	client, err := ipc.New(
 		ipc.WithURL(redisAddr),
@@ -76,7 +65,6 @@ func NewController(redisAddr string, hornEnabled bool, log *slog.Logger) (*Contr
 	return c, nil
 }
 
-// Close closes the controller
 func (c *Controller) Close() error {
 	if err := c.Stop(); err != nil {
 		c.log.Error("failed to stop alarm during close", "error", err)
@@ -87,25 +75,21 @@ func (c *Controller) Close() error {
 	return c.ipc.Close()
 }
 
-// SetCommander sets the RuntimeCommander used to forward arm/disarm commands to the FSM.
 func (c *Controller) SetCommander(commander RuntimeCommander) {
 	c.commander = commander
 }
 
-// SetHornEnabled updates the horn enabled setting
 func (c *Controller) SetHornEnabled(enabled bool) {
 	c.hornEnabled.Store(enabled)
 	c.log.Info("horn setting updated", "enabled", enabled)
 	if !enabled {
-		// Disabling mid-siren: clear any energized horn so it doesn't stay on
-		// until the alarm ends (the pattern won't push "off" while disabled).
+		// Silence an energized horn immediately; its pattern stops issuing offs.
 		if _, err := c.ipc.LPush("scooter:horn", "off"); err != nil {
 			c.log.Error("failed to silence horn", "error", err)
 		}
 	}
 }
 
-// Start starts the alarm for the specified duration
 func (c *Controller) Start(duration time.Duration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -119,10 +103,6 @@ func (c *Controller) Start(duration time.Duration) error {
 
 	c.log.Info("starting alarm", "duration", duration)
 
-	// Cancel any in-progress BlinkHazards so its toggles don't fight the
-	// alarm's solid-on hazards. cancelBlinkerLocked also waits for the prior
-	// goroutine to exit, so any trailing "off" it might write lands before
-	// we LPush "both" below — preserving final-write-wins semantics.
 	c.cancelBlinkerLocked()
 
 	ctx, cancel := context.WithCancel(c.ctx)
@@ -142,18 +122,14 @@ func (c *Controller) Start(duration time.Duration) error {
 	return nil
 }
 
-// Stop stops the alarm immediately
 func (c *Controller) Stop() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.stopUnsafe()
 }
 
-// stopUnsafe stops the alarm without locking (internal use)
 func (c *Controller) stopUnsafe() error {
-	// Always cancel any in-progress BlinkHazards even when the alarm wasn't
-	// active — Stop() is the FSM's universal "quiet down" hook on state exit,
-	// and a stale BlinkHazards goroutine would otherwise keep writing.
+
 	c.cancelBlinkerLocked()
 
 	if !c.active {
@@ -166,8 +142,6 @@ func (c *Controller) stopUnsafe() error {
 		c.cancel()
 	}
 
-	// Always turn the horn off when the alarm stops, even if honking was
-	// disabled mid-siren — otherwise the last "on" stays energized.
 	if _, err := c.ipc.LPush("scooter:horn", "off"); err != nil {
 		c.log.Error("failed to turn off horn", "error", err)
 	}
@@ -183,14 +157,8 @@ func (c *Controller) stopUnsafe() error {
 	return nil
 }
 
-// cancelBlinkerLocked cancels any in-progress blinker pattern goroutine and
-// waits for it to exit. Must be called with c.mu held. The lock is kept
-// across the wait — the pattern goroutine does not touch any mu-guarded
-// state, so holding it is safe and keeps the controller's view of
-// blinkerCancel/blinkerDone consistent for concurrent callers (handleCommand
-// runs on a separate goroutine from the FSM). After return, no blinker
-// pattern goroutine is running, so the next LPush from the caller is the
-// final write seen by vehicle-service.
+// cancelBlinkerLocked waits while holding mu; the pattern does not need mu,
+// preserving a coherent cancellation state for concurrent callers.
 func (c *Controller) cancelBlinkerLocked() {
 	if c.blinkerCancel == nil {
 		return
@@ -202,9 +170,6 @@ func (c *Controller) cancelBlinkerLocked() {
 	<-done
 }
 
-// runHornPattern runs the horn on/off pattern with integral cycles.
-// Each cycle is 800ms (400ms on + 400ms off). The pattern runs for
-// the number of complete cycles that fit within the given duration.
 func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration) {
 	const cycleDuration = 800 * time.Millisecond
 	const buffer = 200 * time.Millisecond
@@ -220,7 +185,7 @@ func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration)
 	defer ticker.Stop()
 
 	ticks := 0
-	totalTicks := cycles * 2 // 2 ticks per cycle (on + off)
+	totalTicks := cycles * 2
 
 	for {
 		select {
@@ -248,16 +213,7 @@ func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration)
 	}
 }
 
-// BlinkHazards flashes the hazard lights 3 times as an L1 warning.
-// Each cycle: 600ms on (fade completes at 504ms) + 400ms off.
-// This function is non-blocking to avoid stalling the FSM event loop.
-//
-// If the alarm is already active, the flash is skipped — Start has already
-// driven hazards solid-on and a warning pattern on top would only flicker.
-// If a previous BlinkHazards is still running, it is canceled before the new
-// one starts (latest-wins). The pattern goroutine is cooperatively canceled
-// via the controller's blinker context, so Start/Stop can supersede it
-// cleanly.
+// BlinkHazards is asynchronous, latest-wins, and never overlays active alarm hazards.
 func (c *Controller) BlinkHazards() error {
 	c.mu.Lock()
 	if c.active {
@@ -268,7 +224,6 @@ func (c *Controller) BlinkHazards() error {
 
 	c.log.Info("blinking hazards")
 
-	// Cancel any previous BlinkHazards still in flight.
 	c.cancelBlinkerLocked()
 
 	ctx, cancel := context.WithCancel(c.ctx)
@@ -276,13 +231,9 @@ func (c *Controller) BlinkHazards() error {
 	c.blinkerCancel = cancel
 	c.blinkerDone = done
 
-	// Start the goroutine before releasing the lock so a concurrent
-	// cancelBlinkerLocked never blocks waiting on a goroutine that hasn't
-	// been spawned yet.
 	go func() {
 		defer close(done)
-		// Cooperative sleep: returns false if canceled mid-wait so the
-		// goroutine exits before issuing the next LPush.
+
 		wait := func(d time.Duration) bool {
 			select {
 			case <-time.After(d):
@@ -318,7 +269,6 @@ func (c *Controller) BlinkHazards() error {
 	return nil
 }
 
-// handleCommand handles a command string
 func (c *Controller) handleCommand(cmd string) {
 	switch cmd {
 	case "stop":

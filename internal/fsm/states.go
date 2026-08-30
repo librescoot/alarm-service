@@ -5,21 +5,10 @@ import (
 	"time"
 )
 
-// State entry handlers. After Phase 4 these no longer touch the BMX055
-// directly — chip configuration is reactive in motion-service, which
-// watches the `alarm` hash that we publish via publishCurrentStatus().
-// Each state-transition publish takes ~50 ms (HashWatcher debounce) +
-// ~150 ms (controller.Apply) before the chip is in the new profile;
-// fine for arm/disarm/L1/L2. Hibernation entry is the exception — it's
-// gated synchronously on motion-service confirming the armed-hibernation
-// profile, see confirmHibernationProfile().
-
-// onEnterInit handles entry to init state.
 func (sm *StateMachine) onEnterInit(ctx context.Context) {
 	sm.log.Info("entering init state")
 }
 
-// onEnterWaitingEnabled handles entry to waiting_enabled state.
 func (sm *StateMachine) onEnterWaitingEnabled(ctx context.Context) {
 	sm.log.Info("entering waiting_enabled state")
 	if err := sm.inhibitor.Release(); err != nil {
@@ -29,7 +18,6 @@ func (sm *StateMachine) onEnterWaitingEnabled(ctx context.Context) {
 	sm.wakeFromHibernation = false
 }
 
-// onEnterDisarmed handles entry to disarmed state.
 func (sm *StateMachine) onEnterDisarmed(ctx context.Context) {
 	sm.log.Info("entering disarmed state")
 	if err := sm.inhibitor.Release(); err != nil {
@@ -37,10 +25,8 @@ func (sm *StateMachine) onEnterDisarmed(ctx context.Context) {
 	}
 	sm.level2Cycles = 0
 
-	// If we got here with the vehicle still in stand-by, this is the L2-exhaustion
-	// path: the alarm gave up after a long blare. Start a quiet window before
-	// re-arming (or handing back to nRF52 hibernation), so a stuck/false trigger
-	// can't blare all night and a thief can't simply wait it out.
+	// L2 exhaustion gets a quiet safety window, then re-arms so an attacker
+	// cannot simply wait out the alarm.
 	if sm.vehicleStandby && sm.alarmEnabled {
 		sm.log.Info("post-alarm cooldown started", "duration", "5m", "wake_from_hibernation", sm.wakeFromHibernation)
 		sm.startTimer("post_alarm_cooldown", 5*time.Minute, func() {
@@ -51,12 +37,10 @@ func (sm *StateMachine) onEnterDisarmed(ctx context.Context) {
 	}
 }
 
-// onExitDisarmed handles exit from disarmed state.
 func (sm *StateMachine) onExitDisarmed(_ context.Context) {
 	sm.stopTimer("post_alarm_cooldown")
 }
 
-// onEnterDelayArmed handles entry to delay_armed state.
 func (sm *StateMachine) onEnterDelayArmed(ctx context.Context) {
 	sm.log.Info("entering delay_armed state", "duration", "5s")
 
@@ -72,12 +56,10 @@ func (sm *StateMachine) onEnterDelayArmed(ctx context.Context) {
 	sm.requestDisarm = false
 }
 
-// onExitDelayArmed handles exit from delay_armed state.
 func (sm *StateMachine) onExitDelayArmed(ctx context.Context) {
 	sm.stopTimer("delay_armed")
 }
 
-// onEnterArmed handles entry to armed state.
 func (sm *StateMachine) onEnterArmed(ctx context.Context) {
 	sm.log.Info("entering armed state", "hibernation_imminent", sm.hibernationImminent)
 
@@ -85,26 +67,18 @@ func (sm *StateMachine) onEnterArmed(ctx context.Context) {
 		sm.log.Error("failed to release inhibitor", "error", err)
 	}
 
-	// Mute the handlebar sources for the settling window. Reset on every entry
-	// into armed, so a disarm/rearm cycle gets a fresh one. The timer is left
-	// running when armed is left: an escalation must not strand the sources
-	// muted, and the window is about wall-clock time since arming, not about
-	// which state we happen to be in when it ends.
+	// Each arm starts a fresh window because the lock actuator runs again.
 	sm.handlebarSettled = false
 	sm.startTimer("handlebar_settle", handlebarSettleDelay, func() {
 		sm.SendEvent(HandlebarSettleTimerEvent{})
 	})
 
-	// If pm-service already signalled hibernation-imminent before we got
-	// here, perform the synchronous prepare-hibernation handshake now —
-	// without it, motion-service might still be programming the
-	// armed-hibernation profile when the system suspends.
+	// A pre-existing imminent signal still requires the synchronous handshake.
 	if sm.hibernationImminent {
 		sm.confirmHibernationProfile(ctx)
 	}
 
-	// If we were woken from hibernation and vehicle is still in stand-by, start a
-	// cooldown timer. After 5 minutes with no further triggers, re-hibernate.
+	// A wake edge is not immediate tampering; re-hibernate only after quiet.
 	if sm.wakeFromHibernation && sm.vehicleStandby {
 		sm.log.Info("armed after hibernation wake, starting re-hibernate cooldown", "duration", "5m")
 		sm.startTimer("hibernate_cooldown", 5*time.Minute, func() {
@@ -113,12 +87,10 @@ func (sm *StateMachine) onEnterArmed(ctx context.Context) {
 	}
 }
 
-// onExitArmed handles exit from armed state.
 func (sm *StateMachine) onExitArmed(_ context.Context) {
 	sm.stopTimer("hibernate_cooldown")
 }
 
-// onEnterTriggerLevel1Wait handles entry to trigger_level_1_wait state.
 func (sm *StateMachine) onEnterTriggerLevel1Wait(ctx context.Context) {
 	sm.log.Info("entering trigger_level_1_wait state", "cooldown", sm.l1CooldownDuration)
 
@@ -126,14 +98,12 @@ func (sm *StateMachine) onEnterTriggerLevel1Wait(ctx context.Context) {
 		sm.log.Error("failed to acquire inhibitor", "error", err)
 	}
 
-	// Blink hazards once when L1 is first triggered.
 	if err := sm.alarmController.BlinkHazards(); err != nil {
 		sm.log.Error("failed to blink hazards", "error", err)
 	}
 
-	// Skip the hair trigger when we just came up from a hibernation-wake
-	// motion edge — that initial edge is the wake event, not a tampering.
 	if sm.wakeFromHibernation {
+		// The waking edge is expected and must not immediately sound the alarm.
 		sm.log.Info("skipping hair trigger on hibernation-wake edge")
 	} else if sm.hairTriggerEnabled {
 		sm.log.Info("hair trigger active, starting short alarm", "duration", sm.hairTriggerDuration)
@@ -147,7 +117,6 @@ func (sm *StateMachine) onEnterTriggerLevel1Wait(ctx context.Context) {
 	})
 }
 
-// onExitTriggerLevel1Wait handles exit from trigger_level_1_wait state.
 func (sm *StateMachine) onExitTriggerLevel1Wait(ctx context.Context) {
 	sm.stopTimer("level1_cooldown")
 	if err := sm.alarmController.Stop(); err != nil {
@@ -155,7 +124,6 @@ func (sm *StateMachine) onExitTriggerLevel1Wait(ctx context.Context) {
 	}
 }
 
-// onEnterTriggerLevel1 handles entry to trigger_level_1 state.
 func (sm *StateMachine) onEnterTriggerLevel1(ctx context.Context) {
 	sm.log.Info("entering trigger_level_1 state", "check_duration", "5s")
 
@@ -164,12 +132,10 @@ func (sm *StateMachine) onEnterTriggerLevel1(ctx context.Context) {
 	})
 }
 
-// onExitTriggerLevel1 handles exit from trigger_level_1 state.
 func (sm *StateMachine) onExitTriggerLevel1(ctx context.Context) {
 	sm.stopTimer("level1_check")
 }
 
-// onEnterTriggerLevel2 handles entry to trigger_level_2 state.
 func (sm *StateMachine) onEnterTriggerLevel2(ctx context.Context) {
 	sm.log.Info("entering trigger_level_2 state")
 
@@ -186,7 +152,6 @@ func (sm *StateMachine) onEnterTriggerLevel2(ctx context.Context) {
 	})
 }
 
-// onExitTriggerLevel2 handles exit from trigger_level_2 state.
 func (sm *StateMachine) onExitTriggerLevel2(ctx context.Context) {
 	sm.stopTimer("level2_check")
 	if err := sm.alarmController.Stop(); err != nil {
@@ -194,7 +159,6 @@ func (sm *StateMachine) onExitTriggerLevel2(ctx context.Context) {
 	}
 }
 
-// onEnterWaitingMovement handles entry to waiting_movement state.
 func (sm *StateMachine) onEnterWaitingMovement(ctx context.Context) {
 	sm.log.Info("entering waiting_movement state", "duration", "50s", "cycle", sm.level2Cycles)
 
@@ -207,7 +171,6 @@ func (sm *StateMachine) onEnterWaitingMovement(ctx context.Context) {
 	})
 }
 
-// onExitWaitingMovement handles exit from waiting_movement state.
 func (sm *StateMachine) onExitWaitingMovement(ctx context.Context) {
 	sm.stopTimer("chip_setup")
 	sm.stopTimer("waiting_movement")
@@ -216,7 +179,6 @@ func (sm *StateMachine) onExitWaitingMovement(ctx context.Context) {
 	}
 }
 
-// onEnterSeatboxAccess handles entry to seatbox_access state.
 func (sm *StateMachine) onEnterSeatboxAccess(ctx context.Context) {
 	sm.log.Info("entering seatbox_access state", "previous_state", sm.preSeatboxState.String())
 
@@ -225,7 +187,6 @@ func (sm *StateMachine) onEnterSeatboxAccess(ctx context.Context) {
 	}
 }
 
-// onExitSeatboxAccess handles exit from seatbox_access state.
 func (sm *StateMachine) onExitSeatboxAccess(ctx context.Context) {
 	sm.log.Info("exiting seatbox_access state")
 	if err := sm.inhibitor.Release(); err != nil {

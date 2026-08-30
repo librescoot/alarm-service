@@ -11,10 +11,6 @@ import (
 	"alarm-service/internal/redis"
 )
 
-// Config holds application configuration. The chip-config flags
-// (--i2c-bus, --evdev-*, --poller-interval-ms) are gone — motion-service
-// owns the BMX055 now and alarm-service is a pure consumer of motion
-// events + the synchronous prepare-hibernation handshake.
 type Config struct {
 	RedisAddr                  string
 	Logger                     *slog.Logger
@@ -34,7 +30,6 @@ type Config struct {
 	L1CooldownFlagSet          bool
 }
 
-// App represents the alarm-service application.
 type App struct {
 	cfg             *Config
 	log             *slog.Logger
@@ -47,7 +42,6 @@ type App struct {
 	subscriber      *redis.Subscriber
 }
 
-// New creates a new App.
 func New(cfg *Config) *App {
 	return &App{
 		cfg: cfg,
@@ -55,7 +49,6 @@ func New(cfg *Config) *App {
 	}
 }
 
-// Run runs the application.
 func (a *App) Run(ctx context.Context) error {
 	a.log.Info("starting alarm-service", "redis_addr", a.cfg.RedisAddr)
 
@@ -102,11 +95,6 @@ func (a *App) Run(ctx context.Context) error {
 
 	a.subscriber = redis.NewSubscriber(a.redis, a.stateMachine, a.log)
 
-	// Read motion-service's wake-cause stamp before anything else writes
-	// to motion. Persistent so this works even when motion-service
-	// stamped + published wake-hibernation before alarm-service had its
-	// subscriber up — the hash field is the durable backstop for that
-	// startup-ordering race.
 	if woke, err := a.motion.ConsumeWakeCause(ctx); err != nil {
 		a.log.Warn("consume motion.wake-cause failed", "error", err)
 	} else if woke {
@@ -130,7 +118,6 @@ func (a *App) Run(ctx context.Context) error {
 	return nil
 }
 
-// handleCLIOverrides handles CLI flag overrides for settings.
 func (a *App) handleCLIOverrides() error {
 	settingsPub := a.redis.IPC().NewHashPublisher("settings")
 

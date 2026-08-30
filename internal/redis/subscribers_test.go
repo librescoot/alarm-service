@@ -10,8 +10,6 @@ import (
 	"alarm-service/internal/fsm"
 )
 
-// fakeEventSink records what the subscriber emits without needing a running
-// state machine. Implements the package-private eventSink interface.
 type fakeEventSink struct {
 	mu     sync.Mutex
 	events []fsm.Event
@@ -25,16 +23,12 @@ func (f *fakeEventSink) SendEvent(e fsm.Event) {
 }
 func (f *fakeEventSink) State() fsm.State { return f.state }
 
-// snapshot copies the recorded events. The handlebar dwell timer fires on its
-// own goroutine, so tests must not read the slice directly.
 func (f *fakeEventSink) snapshot() []fsm.Event {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]fsm.Event(nil), f.events...)
 }
 
-// newTestSubscriber populates only the fields the tamper-input handlers touch,
-// which is enough to exercise the baseline and transition logic without Redis.
 func newTestSubscriber() (*Subscriber, *fakeEventSink) {
 	sink := &fakeEventSink{}
 	s := &Subscriber{
@@ -48,16 +42,10 @@ func newTestSubscriber() (*Subscriber, *fakeEventSink) {
 	return s, sink
 }
 
-// testDwell keeps the dwell-timer tests fast while staying long enough that a
-// scheduling hiccup on a loaded machine does not read as a real expiry.
 const testDwell = 30 * time.Millisecond
 
-// pastDwell waits comfortably beyond testDwell so a pending timer has fired.
 func pastDwell() { time.Sleep(4 * testDwell) }
 
-// parseButtonPayload has to accept the payloads vehicle-service publishes on
-// the `buttons` channel and map them to the right TriggerSource. Anything else
-// (blinkers, garbage) must come back not-ok so the subscriber ignores it.
 func TestParseButtonPayload(t *testing.T) {
 	cases := []struct {
 		payload    string
@@ -74,11 +62,9 @@ func TestParseButtonPayload(t *testing.T) {
 		{"brake:right:on", fsm.TriggerSourceBrakeRight, "on", true},
 		{"brake:right:off", fsm.TriggerSourceBrakeRight, "off", true},
 
-		// Blinkers share the channel but are not tampering.
 		{"blinker:left:on", fsm.TriggerSourceUnknown, "", false},
 		{"blinker:right:off", fsm.TriggerSourceUnknown, "", false},
 
-		// Garbage must not panic or match.
 		{"", fsm.TriggerSourceUnknown, "", false},
 		{"nope", fsm.TriggerSourceUnknown, "", false},
 		{"brake::on", fsm.TriggerSourceUnknown, "", false},
@@ -104,7 +90,6 @@ func TestParseButtonPayload(t *testing.T) {
 	}
 }
 
-// A press emits exactly one trigger; the matching release emits none.
 func TestHandleButtonEvent_PressTriggersReleaseDoesNot(t *testing.T) {
 	s, sink := newTestSubscriber()
 
@@ -127,7 +112,6 @@ func TestHandleButtonEvent_PressTriggersReleaseDoesNot(t *testing.T) {
 	}
 }
 
-// alarm.trigger.buttons=false drops the press at the subscriber.
 func TestHandleButtonEvent_FlagDisabledSuppresses(t *testing.T) {
 	s, sink := newTestSubscriber()
 	s.buttonsTriggerEnabled.Store(false)
@@ -140,7 +124,6 @@ func TestHandleButtonEvent_FlagDisabledSuppresses(t *testing.T) {
 	}
 }
 
-// Blinker edges arrive on the same channel and must never trigger.
 func TestHandleButtonEvent_BlinkerIgnored(t *testing.T) {
 	s, sink := newTestSubscriber()
 
@@ -152,8 +135,6 @@ func TestHandleButtonEvent_BlinkerIgnored(t *testing.T) {
 	}
 }
 
-// The first callback is StartWithSync delivering the value that was already
-// there, so it must not emit even when that value is "unlocked".
 func TestHandlebarLock_InitialSyncNoTrigger(t *testing.T) {
 	s, sink := newTestSubscriber()
 
@@ -168,11 +149,10 @@ func TestHandlebarLock_InitialSyncNoTrigger(t *testing.T) {
 	}
 }
 
-// Only locked -> unlocked after the baseline emits a trigger.
 func TestHandlebarLock_LockedToUnlockedTriggers(t *testing.T) {
 	s, sink := newTestSubscriber()
 
-	_ = s.handleHandlebarLockField("locked") // baseline
+	_ = s.handleHandlebarLockField("locked")
 	if err := s.handleHandlebarLockField("unlocked"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -189,33 +169,30 @@ func TestHandlebarLock_LockedToUnlockedTriggers(t *testing.T) {
 	}
 }
 
-// Repeated "unlocked" reports are not transitions and must stay quiet.
 func TestHandlebarLock_RepeatedUnlockedNoTrigger(t *testing.T) {
 	s, sink := newTestSubscriber()
 
-	_ = s.handleHandlebarLockField("unlocked") // baseline
-	_ = s.handleHandlebarLockField("unlocked") // spurious repeat
-	_ = s.handleHandlebarLockField("unlocked") // more noise
+	_ = s.handleHandlebarLockField("unlocked")
+	_ = s.handleHandlebarLockField("unlocked")
+	_ = s.handleHandlebarLockField("unlocked")
 
 	if len(sink.events) != 0 {
 		t.Fatalf("expected no events on repeats, got %v", sink.events)
 	}
 }
 
-// unlocked -> locked -> unlocked fires once, on the second transition.
 func TestHandlebarLock_CycleTriggersOnce(t *testing.T) {
 	s, sink := newTestSubscriber()
 
-	_ = s.handleHandlebarLockField("unlocked") // baseline
-	_ = s.handleHandlebarLockField("locked")   // safe direction, no event
-	_ = s.handleHandlebarLockField("unlocked") // unsafe direction, event
+	_ = s.handleHandlebarLockField("unlocked")
+	_ = s.handleHandlebarLockField("locked")
+	_ = s.handleHandlebarLockField("unlocked")
 
 	if len(sink.events) != 1 {
 		t.Fatalf("expected 1 event, got %d: %v", len(sink.events), sink.events)
 	}
 }
 
-// alarm.trigger.handlebar=false drops the transition at the subscriber.
 func TestHandlebarLock_FlagDisabledSuppresses(t *testing.T) {
 	s, sink := newTestSubscriber()
 	s.handlebarTriggerEnabled.Store(false)
@@ -228,7 +205,6 @@ func TestHandlebarLock_FlagDisabledSuppresses(t *testing.T) {
 	}
 }
 
-// Position sensor follows the same baseline rule as the lock sensor.
 func TestHandlebarPosition_OffPlaceBaselineNoTrigger(t *testing.T) {
 	s, sink := newTestSubscriber()
 
@@ -239,13 +215,10 @@ func TestHandlebarPosition_OffPlaceBaselineNoTrigger(t *testing.T) {
 	}
 }
 
-// The bars leaving on-place starts the dwell timer; it must not emit anything
-// until the timer expires. This is what stops a gust that nudges the bars for a
-// few hundred milliseconds from honking the horn.
 func TestHandlebarPosition_NoTriggerBeforeDwellExpires(t *testing.T) {
 	s, sink := newTestSubscriber()
 
-	_ = s.handleHandlebarPositionField("on-place") // baseline
+	_ = s.handleHandlebarPositionField("on-place")
 	_ = s.handleHandlebarPositionField("off-place")
 
 	if evs := sink.snapshot(); len(evs) != 0 {
@@ -256,7 +229,7 @@ func TestHandlebarPosition_NoTriggerBeforeDwellExpires(t *testing.T) {
 func TestHandlebarPosition_OnPlaceToOffPlaceTriggers(t *testing.T) {
 	s, sink := newTestSubscriber()
 
-	_ = s.handleHandlebarPositionField("on-place") // baseline
+	_ = s.handleHandlebarPositionField("on-place")
 	_ = s.handleHandlebarPositionField("off-place")
 	pastDwell()
 
@@ -273,13 +246,10 @@ func TestHandlebarPosition_OnPlaceToOffPlaceTriggers(t *testing.T) {
 	}
 }
 
-// The bug this whole change exists for: on 2026-08-25 the sensor reported
-// off-place and back inside ~1s while the steering lock was engaged, and the
-// alarm honked. Returning to on-place must cancel the pending trigger.
 func TestHandlebarPosition_ReturnWithinDwellSuppresses(t *testing.T) {
 	s, sink := newTestSubscriber()
 
-	_ = s.handleHandlebarPositionField("on-place") // baseline
+	_ = s.handleHandlebarPositionField("on-place")
 	_ = s.handleHandlebarPositionField("off-place")
 	_ = s.handleHandlebarPositionField("on-place")
 	pastDwell()
@@ -289,12 +259,10 @@ func TestHandlebarPosition_ReturnWithinDwellSuppresses(t *testing.T) {
 	}
 }
 
-// A chattering sensor restarts the dwell on every off-place edge, so it never
-// accumulates a full quiet window and never fires.
 func TestHandlebarPosition_ChatterNeverTriggers(t *testing.T) {
 	s, sink := newTestSubscriber()
 
-	_ = s.handleHandlebarPositionField("on-place") // baseline
+	_ = s.handleHandlebarPositionField("on-place")
 	for i := 0; i < 5; i++ {
 		_ = s.handleHandlebarPositionField("off-place")
 		time.Sleep(testDwell / 4)
@@ -308,17 +276,15 @@ func TestHandlebarPosition_ChatterNeverTriggers(t *testing.T) {
 	}
 }
 
-// A second excursion after a suppressed one still has to arm the alarm. The
-// cancel path must not latch the source off.
 func TestHandlebarPosition_TriggersAfterEarlierSuppression(t *testing.T) {
 	s, sink := newTestSubscriber()
 
-	_ = s.handleHandlebarPositionField("on-place") // baseline
+	_ = s.handleHandlebarPositionField("on-place")
 	_ = s.handleHandlebarPositionField("off-place")
-	_ = s.handleHandlebarPositionField("on-place") // suppressed excursion
+	_ = s.handleHandlebarPositionField("on-place")
 	pastDwell()
 
-	_ = s.handleHandlebarPositionField("off-place") // real one, held
+	_ = s.handleHandlebarPositionField("off-place")
 	pastDwell()
 
 	if evs := sink.snapshot(); len(evs) != 1 {
@@ -326,11 +292,10 @@ func TestHandlebarPosition_TriggersAfterEarlierSuppression(t *testing.T) {
 	}
 }
 
-// Staying off-place fires once, not once per redundant off-place publish.
 func TestHandlebarPosition_HeldOffPlaceTriggersOnce(t *testing.T) {
 	s, sink := newTestSubscriber()
 
-	_ = s.handleHandlebarPositionField("on-place") // baseline
+	_ = s.handleHandlebarPositionField("on-place")
 	_ = s.handleHandlebarPositionField("off-place")
 	_ = s.handleHandlebarPositionField("off-place")
 	pastDwell()
@@ -353,8 +318,6 @@ func TestHandlebarPosition_FlagDisabledSuppresses(t *testing.T) {
 	}
 }
 
-// alarm.seatbox-trigger=false downgrades an unauthorized opening to an
-// authorized one instead of escalating.
 func TestSeatboxLock_FlagDisabledTreatsOpenAsAuthorized(t *testing.T) {
 	s, sink := newTestSubscriber()
 	s.seatboxTriggerEnabled.Store(false)
@@ -371,7 +334,6 @@ func TestSeatboxLock_FlagDisabledTreatsOpenAsAuthorized(t *testing.T) {
 	}
 }
 
-// With the flag on, the same edge is tampering.
 func TestSeatboxLock_FlagEnabledTriggers(t *testing.T) {
 	s, sink := newTestSubscriber()
 
@@ -385,9 +347,6 @@ func TestSeatboxLock_FlagEnabledTriggers(t *testing.T) {
 	}
 }
 
-// The settings watcher writes the trigger flags from its own goroutine while
-// the vehicle watcher and the buttons subscription read them from theirs.
-// Under -race this fails if any of the three goes back to a plain bool.
 func TestSubscriber_TriggerFlagsCrossGoroutine(t *testing.T) {
 	s, _ := newTestSubscriber()
 

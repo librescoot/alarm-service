@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// State represents an alarm state
 type State int
 
 const (
@@ -38,7 +37,6 @@ func (s State) String() string {
 	}[s]
 }
 
-// Sensitivity represents BMX sensitivity levels
 type Sensitivity int
 
 const (
@@ -60,27 +58,13 @@ func (s Sensitivity) String() string {
 	}
 }
 
-// maxLevel2Cycles caps how many TriggerLevel2/WaitingMovement cycles a single
-// alarm episode runs before bailing out into Disarmed. With ~50s per cycle
-// state, this targets roughly 10 minutes of alarm before the safety valve trips.
+// Bound an alarm episode so a stuck trigger cannot sound indefinitely.
 const maxLevel2Cycles = 6
 
-// handlebarSettleDelay mutes the two handlebar trigger sources for a while
-// after the alarm arms. Locking the vehicle is itself a handlebar event:
-// vehicle-service pulses the lock solenoid for 1.1s with up to three retries,
-// and for a rider who has to swing the bars into place first it keeps a 60s
-// positioning window open, pulsing again whenever the bars arrive. Any of
-// those can bounce the lock sensor or move the position sensor while we are
-// already armed, which reads exactly like tampering.
-//
-// Arming starts ~5s after the vehicle reaches stand-by, so a 60s delay here
-// would expire just as vehicle-service's own 60s window closes, and the
-// retry pulses that follow a late positioning would land outside it. 90s
-// clears the window plus the retries with ~30s to spare. Motion, buttons and
-// the seatbox stay live throughout, so the vehicle is not unwatched.
+// Vehicle lock actuation creates handlebar edges; keep only those sensors muted
+// until its positioning retries finish. Other tamper sources remain live.
 const handlebarSettleDelay = 90 * time.Second
 
-// StateMachine implements the alarm FSM
 type StateMachine struct {
 	mu     sync.RWMutex
 	state  State
@@ -105,46 +89,34 @@ type StateMachine struct {
 	l1CooldownDuration  int
 	preSeatboxState     State
 	seatboxLockClosed   bool
-	wakeFromHibernation bool // woken from hibernation by motion (motion-service stamp or live event)
-	hibernationImminent bool // pm-service signalled hibernation is imminent or in progress
+	// A durable motion wake is consumed once and drives safe re-hibernation.
+	wakeFromHibernation bool
+	hibernationImminent bool
 
-	// motionTriggerEnabled mirrors settings alarm.trigger.motion. The button
-	// and handlebar equivalents are filtered in the subscriber; motion is
-	// filtered here so the wake-from-hibernation stamp survives the drop.
+	// Motion stays in the FSM so its wake stamp survives a disabled trigger.
 	motionTriggerEnabled bool
 
-	// handlebarSettled is false while the post-arm settling window runs, during
-	// which handlebar edges are the vehicle locking itself rather than
-	// tampering. See handlebarSettleDelay.
 	handlebarSettled bool
 }
 
-// MotionRPC is the synchronous motion-service interface alarm-service needs:
-// the chip-config-confirmed handshake before pm-service is allowed to suspend.
-// Steady-state arm/disarm flows reactively through the alarm hash that
-// motion-service watches — no synchronous Call required for those.
 type MotionRPC interface {
 	PrepareHibernation(ctx context.Context) error
 }
 
-// StatusPublisher interface for publishing alarm status
 type StatusPublisher interface {
 	PublishStatus(status string) error
 	PublishTrigger(source string, at time.Time) error
 }
 
-// SuspendInhibitor interface for managing wake locks
 type SuspendInhibitor interface {
 	Acquire(reason string) error
 	Release() error
 }
 
-// PowerCommander interface for sending power state commands
 type PowerCommander interface {
 	RequestHibernate() error
 }
 
-// AlarmController interface for horn and hazard lights
 type AlarmController interface {
 	Start(duration time.Duration) error
 	Stop() error
@@ -152,7 +124,6 @@ type AlarmController interface {
 	BlinkHazards() error
 }
 
-// New creates a new StateMachine
 func New(
 	motion MotionRPC,
 	pub StatusPublisher,
@@ -185,14 +156,10 @@ func New(
 
 		motionTriggerEnabled: true,
 
-		// Nothing has armed yet, so there is no settling window to sit out.
-		// onEnterArmed opens one on every entry into armed.
 		handlebarSettled: true,
 	}
 }
 
-// isTamperTrigger reports whether an event is a tamper trigger, meaning motion
-// or one of the discrete inputs. Both feed the same escalation path.
 func isTamperTrigger(e Event) bool {
 	switch e.(type) {
 	case BMXInterruptEvent, InputTriggerEvent:
@@ -201,10 +168,6 @@ func isTamperTrigger(e Event) bool {
 	return false
 }
 
-// triggerSourceOf names the input behind an event for the alarm hash, so a
-// later `hgetall alarm` can say what set the alarm off. Deliberately separate
-// from isTamperTrigger, which excludes the seatbox because it gates the L1
-// hazard blink rather than provenance.
 func triggerSourceOf(e Event) (string, bool) {
 	switch ev := e.(type) {
 	case InputTriggerEvent:
@@ -217,7 +180,6 @@ func triggerSourceOf(e Event) (string, bool) {
 	return "", false
 }
 
-// Run runs the state machine event loop
 func (sm *StateMachine) Run(ctx context.Context) {
 	sm.log.Info("starting state machine")
 	sm.ctx = ctx
@@ -235,7 +197,6 @@ func (sm *StateMachine) Run(ctx context.Context) {
 	}
 }
 
-// SendEvent sends an event to the state machine
 func (sm *StateMachine) SendEvent(event Event) {
 	select {
 	case sm.events <- event:
@@ -244,20 +205,16 @@ func (sm *StateMachine) SendEvent(event Event) {
 	}
 }
 
-// RuntimeArm implements alarm.RuntimeCommander — forces arming without changing alarm.enabled
 func (sm *StateMachine) RuntimeArm() { sm.SendEvent(RuntimeArmEvent{}) }
 
-// RuntimeDisarm implements alarm.RuntimeCommander — forces disarming without changing alarm.enabled
 func (sm *StateMachine) RuntimeDisarm() { sm.SendEvent(RuntimeDisarmEvent{}) }
 
-// State returns the current state
 func (sm *StateMachine) State() State {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return sm.state
 }
 
-// handleEvent processes an event
 func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -331,10 +288,7 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 			return
 		}
 		if sm.wakeFromHibernation {
-			// Transition into StateArmed so the BMX is properly configured for
-			// motion detection (and the nRF52 has something to wake on once we
-			// hibernate), then request hibernate. Clear the flag first so
-			// onEnterArmed doesn't start another 5-min cooldown.
+			// Enter Armed first so motion hardware is ready for the next wake.
 			sm.wakeFromHibernation = false
 			sm.log.Info("post-alarm cooldown elapsed, arming and requesting re-hibernate")
 			sm.exitState(ctx, StateDisarmed)
@@ -346,14 +300,11 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 			}
 			return
 		}
-		// Fall through to normal transition handling so the FSM re-arms via
-		// the StateDisarmed handler below (Disarmed → DelayArmed → Armed).
+
 	}
 
-	// alarm.trigger.motion=false: motion never escalates the alarm. The
-	// wake-from-hibernation stamp is still recorded, so the re-hibernate
-	// bookkeeping keeps working. This only suppresses the trigger; the chip
-	// still asserts its interrupt and the nRF52 still wakes the MDB.
+	// Disabled motion must not alarm, but a hibernation wake still needs its
+	// cooldown bookkeeping.
 	if be, ok := event.(BMXInterruptEvent); ok && !sm.motionTriggerEnabled {
 		if be.Data == "wake-hibernation" {
 			sm.wakeFromHibernation = true
@@ -362,10 +313,7 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 		return
 	}
 
-	// Handlebar edges inside the settling window are the vehicle working its
-	// own lock, see handlebarSettleDelay. Dropped outright rather than held
-	// back: by the time the window closes the edge is stale, and replaying it
-	// would sound the alarm for something that finished a minute ago.
+	// Drop, rather than defer, stale edges from the vehicle's own lock cycle.
 	if e, ok := event.(InputTriggerEvent); ok && e.Source.isHandlebar() && !sm.handlebarSettled {
 		sm.log.Debug("dropping handlebar trigger, still inside the post-arm settling window",
 			"source", e.Source.String())
@@ -380,7 +328,7 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 	newState := sm.getTransition(event)
 
 	if newState != oldState {
-		// Blink hazards when tampering is detected during L1 (before L2 activation)
+
 		if oldState == StateTriggerLevel1 && newState == StateTriggerLevel2 && isTamperTrigger(event) {
 			sm.log.Info("tampering detected during L1, blinking hazards", "event", event.Type())
 			if err := sm.alarmController.BlinkHazards(); err != nil {
@@ -395,18 +343,13 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 			"to", newState.String(),
 			"event", event.Type())
 		sm.enterState(ctx, newState)
-		// Published before the status so anything woken by the status change
-		// already sees the matching source. Only events that actually moved
-		// the FSM get here: a trigger dropped by the settling window, a
-		// disabled source or the position dwell never claims the field.
+
+		// Publish provenance before status so observers see a matching source.
 		sm.publishTriggerSource(event)
 		sm.publishCurrentStatus()
 	}
 }
 
-// publishTriggerSource records what caused a transition, when the event names
-// an input at all. Never cleared: the last trigger stays readable after the
-// vehicle is unlocked and is only replaced by the next real one.
 func (sm *StateMachine) publishTriggerSource(event Event) {
 	source, ok := triggerSourceOf(event)
 	if !ok {
@@ -417,7 +360,6 @@ func (sm *StateMachine) publishTriggerSource(event Event) {
 	}
 }
 
-// publishCurrentStatus publishes the current alarm status
 func (sm *StateMachine) publishCurrentStatus() {
 	status := sm.stateToStatus(sm.state)
 	if err := sm.publisher.PublishStatus(status); err != nil {
@@ -425,7 +367,6 @@ func (sm *StateMachine) publishCurrentStatus() {
 	}
 }
 
-// stateToStatus converts state to status string
 func (sm *StateMachine) stateToStatus(state State) string {
 	switch state {
 	case StateWaitingEnabled:
@@ -447,18 +388,12 @@ func (sm *StateMachine) stateToStatus(state State) string {
 	}
 }
 
-// confirmHibernationProfile is the synchronous handshake that gates pm-service's
-// suspend on motion-service having the chip in armed-hibernation profile. Called
-// when hibernationImminent flips to true while we're in StateArmed. Steady-state
-// arm/disarm/L1/L2 transitions don't need this — motion-service watches the alarm
-// hash and reconfigures reactively. This is the one synchronous point: we have
-// to be sure the chip is right before pm-service kills the MDB.
+// confirmHibernationProfile synchronously gates suspend on the stricter motion
+// profile; reactive profile updates are insufficient once power is removed.
 func (sm *StateMachine) confirmHibernationProfile(ctx context.Context) {
 	sm.log.Info("requesting motion-service prepare-hibernation")
 	if err := sm.motion.PrepareHibernation(ctx); err != nil {
-		// Keep the inhibitor held — pm-service must not be allowed to suspend
-		// with an unverified chip profile. Ops will see the error in journal
-		// and either restart motion-service or override.
+		// Keep suspend blocked when the chip profile cannot be verified.
 		sm.log.Error("prepare-hibernation failed; holding pm-inhibitor to block suspend", "error", err)
 		if err := sm.inhibitor.Acquire("Motion-service prepare-hibernation failed"); err != nil {
 			sm.log.Error("failed to acquire suspend inhibitor", "error", err)
@@ -468,7 +403,6 @@ func (sm *StateMachine) confirmHibernationProfile(ctx context.Context) {
 	sm.log.Info("motion-service confirmed armed-hibernation profile")
 }
 
-// startTimer starts a timer
 func (sm *StateMachine) startTimer(name string, duration time.Duration, callback func()) {
 	sm.stopTimer(name)
 
@@ -482,7 +416,6 @@ func (sm *StateMachine) startTimer(name string, duration time.Duration, callback
 	sm.log.Debug("started timer", "name", name, "duration", duration)
 }
 
-// stopTimer stops a timer
 func (sm *StateMachine) stopTimer(name string) {
 	if timer, ok := sm.timers[name]; ok {
 		timer.Stop()
@@ -491,7 +424,6 @@ func (sm *StateMachine) stopTimer(name string) {
 	}
 }
 
-// cleanupTimers stops all timers
 func (sm *StateMachine) cleanupTimers() {
 	for name := range sm.timers {
 		sm.stopTimer(name)

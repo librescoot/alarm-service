@@ -7,13 +7,11 @@ import (
 	ipc "github.com/librescoot/redis-ipc"
 )
 
-// Publisher handles publishing alarm status to Redis
 type Publisher struct {
 	alarmPub *ipc.HashPublisher
 	ipc      *ipc.Client
 }
 
-// NewPublisher creates a new Publisher
 func NewPublisher(client *Client) *Publisher {
 	return &Publisher{
 		alarmPub: client.ipc.NewHashPublisher("alarm"),
@@ -21,7 +19,6 @@ func NewPublisher(client *Client) *Publisher {
 	}
 }
 
-// PublishStatus publishes alarm status using HashPublisher
 func (p *Publisher) PublishStatus(status string) error {
 	if err := p.alarmPub.Set("status", status); err != nil {
 		return fmt.Errorf("failed to publish alarm status: %w", err)
@@ -29,10 +26,6 @@ func (p *Publisher) PublishStatus(status string) error {
 	return nil
 }
 
-// PublishTrigger records what set the alarm off. Both fields go out in one
-// round trip with a single notification, so a consumer watching the hash is
-// woken once and never sees a source paired with the previous timestamp.
-// Timestamp format matches vehicle[state:timestamp].
 func (p *Publisher) PublishTrigger(source string, at time.Time) error {
 	fields := map[string]any{
 		"trigger:source":    source,
@@ -44,7 +37,6 @@ func (p *Publisher) PublishTrigger(source string, at time.Time) error {
 	return nil
 }
 
-// RequestHibernate sends a hibernate-manual command to pm-service
 func (p *Publisher) RequestHibernate() error {
 	if _, err := p.ipc.LPush("scooter:power", "hibernate-manual"); err != nil {
 		return fmt.Errorf("failed to send hibernate command: %w", err)

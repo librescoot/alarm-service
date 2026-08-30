@@ -2,8 +2,6 @@ package fsm
 
 import "context"
 
-// shouldDisarmForVehicleState returns true if the vehicle state should cause the alarm to disarm.
-// The alarm stays armed for all states except explicit "user unlocked" states.
 func shouldDisarmForVehicleState(state VehicleState) bool {
 	switch state {
 	case VehicleStateParked, VehicleStateReadyToDrive, VehicleStateWaitingSeatbox:
@@ -13,7 +11,6 @@ func shouldDisarmForVehicleState(state VehicleState) bool {
 	}
 }
 
-// getTransition determines the next state based on current state and event
 func (sm *StateMachine) getTransition(event Event) State {
 	switch sm.state {
 	case StateInit:
@@ -29,13 +26,7 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(InitCompleteEvent); ok {
 			if sm.alarmEnabled {
 				if sm.vehicleStandby {
-					// If motion-service stamped wake-hibernation onto our event
-					// stream during init (either via the durable motion.wake-cause
-					// hash field or the live motion:interrupt pub/sub), drop
-					// straight to L1 wait: the motion edge that fired the latch
-					// was the wake event, treat it as a real motion trigger.
-					// With alarm.trigger.motion off we keep the flag (the
-					// re-hibernate cooldown needs it) but skip the escalation.
+
 					if sm.wakeFromHibernation && sm.motionTriggerEnabled {
 						sm.log.Info("init wake-from-hibernation, triggering L1")
 						return StateTriggerLevel1Wait
@@ -48,9 +39,7 @@ func (sm *StateMachine) getTransition(event Event) State {
 		}
 
 	case StateWaitingEnabled:
-		// Keep the cached vehicle state fresh while disabled so a later enable
-		// arms correctly; otherwise a lock-to-standby here is dropped and the
-		// alarm wrongly routes to Disarmed until the next vehicle-state change.
+
 		if e, ok := event.(VehicleStateChangedEvent); ok {
 			sm.vehicleStandby = (e.State == VehicleStateStandby)
 		}
@@ -245,7 +234,6 @@ func (sm *StateMachine) getTransition(event Event) State {
 	return sm.state
 }
 
-// enterState handles state entry actions
 func (sm *StateMachine) enterState(ctx context.Context, state State) {
 	switch state {
 	case StateInit:
@@ -271,7 +259,6 @@ func (sm *StateMachine) enterState(ctx context.Context, state State) {
 	}
 }
 
-// exitState handles state exit actions
 func (sm *StateMachine) exitState(ctx context.Context, state State) {
 	switch state {
 	case StateDisarmed:

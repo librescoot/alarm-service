@@ -9,54 +9,29 @@ import (
 	ipc "github.com/librescoot/redis-ipc"
 )
 
-
-// motion-service RPC channel + method names. Kept here, not pulled from
-// the motion-service repo, to avoid an import dependency between the two
-// service repos. If motion-service ever changes its protocol, this is the
-// one file that changes.
+// This mirrors motion-service's public RPC without an inter-repository import.
 const (
-	motionRPCChannel              = "motion:rpc"
+	motionRPCChannel               = "motion:rpc"
 	motionMethodPrepareHibernation = "prepare-hibernation"
 
-	// Hash + field where motion-service stamps a wake-from-hibernation
-	// indicator on its startup if it found a pre-existing latched interrupt.
-	// Persistent so we don't lose the signal to a startup-ordering race
-	// with the pub/sub motion:interrupt channel.
 	motionHash         = "motion"
 	motionWakeCauseFld = "wake-cause"
 )
 
-// PrepareHibernationReq is the wire payload for the synchronous chip-config
-// confirmation alarm-service performs before letting pm-service suspend.
 type PrepareHibernationReq struct {
 	Profile string `json:"profile"`
 }
 
-// PrepareHibernationResp is what motion-service answers with.
 type PrepareHibernationResp struct {
 	Programmed bool   `json:"programmed"`
 	Profile    string `json:"profile"`
 }
 
-// MotionClient is a thin wrapper over the redis-ipc Call primitive for the
-// motion-service RPC surface alarm-service depends on. Only the synchronous
-// hibernation handshake is exposed today; everything else (profile changes
-// for arm/disarm/L1/L2) flows reactively through the alarm hash that
-// motion-service watches.
-//
-// Two ipc clients: `bus` for the existing string-codec uses (HGet/HDel
-// of motion.wake-cause); `rpc` is a dedicated JSON-codec client used for
-// CallMethod, since the typed Req/Resp encoding goes through the
-// client's codec. Pool size 4 on the rpc client — overkill for one
-// caller-side conn but cheap and gives headroom for future extra RPCs.
 type MotionClient struct {
 	bus *ipc.Client
 	rpc *ipc.Client
 }
 
-// NewMotionClient returns a client. `bus` should be the alarm-service's
-// existing redis-ipc client (StringCodec); the function spins up a
-// parallel JSON-codec client for the Call work.
 func NewMotionClient(bus *ipc.Client) (*MotionClient, error) {
 	addr, port := splitHostPort(bus.Raw().Options().Addr)
 	rpc, err := ipc.New(
@@ -72,7 +47,6 @@ func NewMotionClient(bus *ipc.Client) (*MotionClient, error) {
 	return &MotionClient{bus: bus, rpc: rpc}, nil
 }
 
-// Close shuts down the dedicated rpc ipc client.
 func (m *MotionClient) Close() error {
 	if m.rpc != nil {
 		return m.rpc.Close()
@@ -80,8 +54,6 @@ func (m *MotionClient) Close() error {
 	return nil
 }
 
-// splitHostPort splits "host:port" into ("host", port). Default port 6379
-// if not specified or unparseable.
 func splitHostPort(addr string) (string, int) {
 	for i := len(addr) - 1; i >= 0; i-- {
 		if addr[i] == ':' {
@@ -95,13 +67,8 @@ func splitHostPort(addr string) (string, int) {
 	return addr, 6379
 }
 
-// PrepareHibernation synchronously asks motion-service to confirm the chip
-// is in armed-hibernation profile. Used as the gating handshake before
-// alarm-service releases the pm-service suspend inhibitor.
-//
-// 1.5 s timeout matches pm-service's SuspendImminentDelay (5 s) with margin.
-// motion-service's apply path is well under 200 ms on the bench; the timeout
-// is for I2C wedge / motion-service crash-restart cases.
+// PrepareHibernation is the suspend-gating RPC; its timeout leaves margin
+// inside pm-service's hibernation-imminent delay.
 func (m *MotionClient) PrepareHibernation(ctx context.Context) error {
 	resp, err := ipc.CallMethod[PrepareHibernationReq, PrepareHibernationResp](
 		m.rpc,
@@ -119,11 +86,8 @@ func (m *MotionClient) PrepareHibernation(ctx context.Context) error {
 	return nil
 }
 
-// ConsumeWakeCause reads + clears the motion.wake-cause field. Returns
-// true if motion-service stamped a wake-from-hibernation indicator and
-// the timestamp is recent (within 30 s of now). The field is deleted
-// after consumption so a subsequent alarm-service restart doesn't pick
-// it up again.
+// Consume the durable, one-shot wake cause; the hash closes the pub/sub
+// startup race and stale values are ignored.
 func (m *MotionClient) ConsumeWakeCause(ctx context.Context) (bool, error) {
 	val, err := m.bus.HGet(motionHash, motionWakeCauseFld)
 	if err != nil {
@@ -132,7 +96,8 @@ func (m *MotionClient) ConsumeWakeCause(ctx context.Context) (bool, error) {
 		}
 		return false, fmt.Errorf("HGet %s.%s: %w", motionHash, motionWakeCauseFld, err)
 	}
-	// Always best-effort delete so a stale value can't pollute the next start.
+
+	// Delete even malformed or stale values to prevent a replay.
 	defer m.bus.Raw().HDel(m.bus.Context(), motionHash, motionWakeCauseFld)
 
 	if val == "" {

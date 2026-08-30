@@ -14,52 +14,25 @@ import (
 	ipc "github.com/librescoot/redis-ipc"
 )
 
-// seatboxBounceWindow filters spurious sensor edges right after an authorized
-// close. The latch can rebound briefly while the lid settles, which used to
-// surface as seatbox:lock=open without a paired seatbox:opened event and
-// triggered StateTriggerLevel2. 500ms covers observed mechanical settle time
-// while staying well below any plausible legit re-open cadence. A legit
-// re-open within this window still works because the app/button path emits
-// seatbox:opened first, which sets authorizedSeatboxPending and bypasses the
-// bounce check entirely.
+// Ignore latch rebound after an authorized close; a real reopen first emits
+// seatbox:opened and therefore bypasses this filter.
 const seatboxBounceWindow = 500 * time.Millisecond
 
-// defaultHandlebarPositionDwell is how long the bars must stay off-place before
-// that counts as tampering. The position sensor and the lock sensor are
-// independent and can sit slightly out of alignment, so the lock pin engages
-// while the bars rest at the edge of the position sensor's on-place zone. From
-// there, wind or vibration is enough to flip the reading across the threshold,
-// which is indistinguishable from a turn until it persists. A real tamper
-// leaves the bars off-place, so the only cost here is delaying the alarm by
-// this much.
-// Suppressed excursions are logged with their duration so the value can be
-// retuned against real data rather than guessed at again.
-//
-// Deliberately not gated on handlebar:lock-state reading unlocked. A forced or
-// broken lock pin can leave that sensor reading locked while the bars turn
-// freely, which is a theft signature, not a reason to stop watching.
+// Position must remain unsafe long enough to distinguish tampering from wind
+// or sensor alignment noise; the lock reading is not trusted as a gate.
 const defaultHandlebarPositionDwell = 1 * time.Second
 
-// motionEvent mirrors motion-service's MotionEvent JSON envelope. Kept
-// minimal to avoid a hard dependency on the motion-service repo. The Type
-// field is what gets propagated into BMXInterruptEvent.Data — the FSM
-// already discriminates "wake-hibernation" from regular edges via that
-// field. Decoded by hand in the subscription handler so this works
-// alongside the alarm-service redis-ipc client's StringCodec default.
 type motionEvent struct {
 	Type      string `json:"type"`
 	Timestamp int64  `json:"timestamp"`
 	Engine    string `json:"engine,omitempty"`
 }
 
-// eventSink is the part of fsm.StateMachine the subscriber uses. Extracted so
-// the tamper-input handlers can be exercised without a running FSM.
 type eventSink interface {
 	SendEvent(fsm.Event)
 	State() fsm.State
 }
 
-// Subscriber handles subscribing to Redis channels using HashWatcher
 type Subscriber struct {
 	vehicleWatcher           *ipc.HashWatcher
 	settingsWatcher          *ipc.HashWatcher
@@ -72,27 +45,16 @@ type Subscriber struct {
 	authorizedSeatboxPending bool
 	lastSeatboxCloseAt       time.Time
 
-	// Per-source trigger flags. Rejected events are dropped here rather than
-	// in the FSM, so an opted-out source costs nothing downstream. Atomic
-	// because the settings watcher writes them from its own goroutine while
-	// the vehicle watcher and the buttons subscription read them from theirs.
 	seatboxTriggerEnabled   atomic.Bool
 	buttonsTriggerEnabled   atomic.Bool
 	handlebarTriggerEnabled atomic.Bool
 
-	// Last seen values of the handlebar tamper fields, used to tell a real
-	// safe-to-unsafe transition from StartWithSync delivering the value that
-	// was already there. Plenty of scooters park with the handlebar lock never
-	// engaged, so "unlocked" is a legitimate resting value and must not fire
-	// the alarm on every service restart.
+	// Initial StartWithSync values establish a baseline; parked scooters may
+	// legitimately start with either sensor unsafe.
 	handlebarLockLast     string
 	handlebarPositionLast string
 
-	// Dwell state for the position sensor. handlebarDwellMu guards all three:
-	// the timer callback runs on its own goroutine while the vehicle watcher
-	// drives the edges from another. handlebarDwellGen invalidates a timer that
-	// already fired by the time we tried to stop it, which Timer.Stop alone
-	// cannot express.
+	// The generation invalidates a timer that has fired but is waiting on mu.
 	handlebarDwellMu       sync.Mutex
 	handlebarDwellTimer    *time.Timer
 	handlebarDwellGen      uint64
@@ -100,7 +62,6 @@ type Subscriber struct {
 	handlebarPositionDwell time.Duration
 }
 
-// NewSubscriber creates a new Subscriber with HashWatcher instances
 func NewSubscriber(client *Client, sm *fsm.StateMachine, log *slog.Logger) *Subscriber {
 	s := &Subscriber{
 		vehicleWatcher:      client.ipc.NewHashWatcher("vehicle"),
@@ -111,8 +72,6 @@ func NewSubscriber(client *Client, sm *fsm.StateMachine, log *slog.Logger) *Subs
 		sm:                  sm,
 	}
 
-	// default: seatbox, brake/horn/seatbox buttons and handlebar sensors can
-	// all trigger the alarm
 	s.seatboxTriggerEnabled.Store(true)
 	s.buttonsTriggerEnabled.Store(true)
 	s.handlebarTriggerEnabled.Store(false)
@@ -125,9 +84,6 @@ func NewSubscriber(client *Client, sm *fsm.StateMachine, log *slog.Logger) *Subs
 	return s
 }
 
-// isHibernatingImminentState reports whether a power-manager state value indicates
-// that hibernation is imminent or in progress. Suspend is intentionally excluded —
-// the BMX hibernation profile is only meant to gate full power-down events.
 func isHibernatingImminentState(state string) bool {
 	switch state {
 	case "hibernating-imminent",
@@ -141,7 +97,6 @@ func isHibernatingImminentState(state string) bool {
 	return false
 }
 
-// setupVehicleWatcher registers handlers for vehicle state changes
 func (s *Subscriber) setupVehicleWatcher() {
 	s.vehicleWatcher.OnField("state", func(stateStr string) error {
 		state := fsm.ParseVehicleState(stateStr)
@@ -162,9 +117,6 @@ func (s *Subscriber) setupVehicleWatcher() {
 	s.vehicleWatcher.OnField("handlebar:position", s.handleHandlebarPositionField)
 }
 
-// handleSeatboxLockField turns a seatbox latch edge into either an authorized
-// opening or a tamper trigger, after filtering the sensor bounce that follows
-// an authorized close.
 func (s *Subscriber) handleSeatboxLockField(lockState string) error {
 	s.log.Debug("seatbox lock state changed", "state", lockState)
 	if lockState == "closed" {
@@ -173,7 +125,7 @@ func (s *Subscriber) handleSeatboxLockField(lockState string) error {
 		s.sm.SendEvent(fsm.SeatboxClosedEvent{})
 	} else if lockState == "open" {
 		if s.authorizedSeatboxPending {
-			// seatbox:opened event was already received for this opening cycle; skip
+
 			return nil
 		}
 		currentState := s.sm.State()
@@ -197,9 +149,7 @@ func (s *Subscriber) handleSeatboxLockField(lockState string) error {
 	return nil
 }
 
-// handleHandlebarLockField emits a trigger only for a locked-to-unlocked
-// transition seen after the baseline value has been captured. See the
-// handlebarLockLast comment for why the baseline matters.
+// Only a post-baseline locked-to-unlocked transition is tampering.
 func (s *Subscriber) handleHandlebarLockField(lockState string) error {
 	prev := s.handlebarLockLast
 	s.handlebarLockLast = lockState
@@ -219,10 +169,6 @@ func (s *Subscriber) handleHandlebarLockField(lockState string) error {
 	return nil
 }
 
-// handleHandlebarPositionField is the position-sensor counterpart of
-// handleHandlebarLockField. Only on-place to off-place counts, and only after
-// the baseline: a rider who parked with the bars turned leaves "off-place" as
-// the resting value.
 func (s *Subscriber) handleHandlebarPositionField(position string) error {
 	prev := s.handlebarPositionLast
 	s.handlebarPositionLast = position
@@ -231,7 +177,7 @@ func (s *Subscriber) handleHandlebarPositionField(position string) error {
 		return nil
 	}
 	if position != "off-place" {
-		// Back on-place. Anything pending was a brief excursion, not tampering.
+
 		s.cancelHandlebarDwell()
 		return nil
 	}
@@ -246,9 +192,7 @@ func (s *Subscriber) handleHandlebarPositionField(position string) error {
 	return nil
 }
 
-// startHandlebarDwell begins the window the bars must stay off-place for. A
-// fresh off-place edge restarts it, so a chattering sensor never accumulates a
-// full window.
+// Restart on each edge so chattering cannot accumulate a full dwell period.
 func (s *Subscriber) startHandlebarDwell(prev string) {
 	s.handlebarDwellMu.Lock()
 	defer s.handlebarDwellMu.Unlock()
@@ -265,9 +209,6 @@ func (s *Subscriber) startHandlebarDwell(prev string) {
 	s.handlebarDwellTimer = time.AfterFunc(dwell, func() { s.fireHandlebarDwell(gen) })
 }
 
-// cancelHandlebarDwell drops a pending trigger because the bars came back. The
-// duration is logged so the dwell constant can be retuned against what the
-// sensor and the weather actually do, rather than guessed at a second time.
 func (s *Subscriber) cancelHandlebarDwell() {
 	s.handlebarDwellMu.Lock()
 	defer s.handlebarDwellMu.Unlock()
@@ -277,15 +218,13 @@ func (s *Subscriber) cancelHandlebarDwell() {
 	}
 	s.handlebarDwellTimer.Stop()
 	s.handlebarDwellTimer = nil
-	// Invalidate a timer that already fired and is blocked on this mutex;
-	// Timer.Stop cannot report that case on its own.
+
+	// Timer.Stop cannot invalidate a callback already waiting on this mutex.
 	s.handlebarDwellGen++
 	s.log.Info("handlebar off-place returned within dwell, ignored",
 		"off_place_ms", time.Since(s.handlebarOffPlaceSince).Milliseconds())
 }
 
-// fireHandlebarDwell emits the trigger once the bars have stayed off-place for
-// the whole window. gen guards against a cancelled-but-already-fired timer.
 func (s *Subscriber) fireHandlebarDwell(gen uint64) {
 	s.handlebarDwellMu.Lock()
 	if gen != s.handlebarDwellGen {
@@ -296,9 +235,7 @@ func (s *Subscriber) fireHandlebarDwell(gen uint64) {
 	held := time.Since(s.handlebarOffPlaceSince)
 	s.handlebarDwellMu.Unlock()
 
-	// Re-checked here and not just at the edge: the setting is the kill switch
-	// for a misbehaving sensor, so a timer armed before it was flipped off must
-	// not still honk the horn a second later.
+	// The setting is a live safety kill switch, including for an already-armed timer.
 	if !s.handlebarTriggerEnabled.Load() {
 		s.log.Debug("handlebar dwell expired but trigger disabled meanwhile")
 		return
@@ -309,7 +246,6 @@ func (s *Subscriber) fireHandlebarDwell(gen uint64) {
 	s.sm.SendEvent(fsm.InputTriggerEvent{Source: fsm.TriggerSourceHandlebarPosition})
 }
 
-// setupSettingsWatcher registers handlers for alarm settings changes
 func (s *Subscriber) setupSettingsWatcher() {
 	s.settingsWatcher.OnField("alarm.enabled", func(alarmEnabled string) error {
 		enabled := alarmEnabled == "true"
@@ -404,9 +340,6 @@ func (s *Subscriber) setupSettingsWatcher() {
 	})
 }
 
-// setupPowerManagerWatcher reacts to pm-service publishing its current power-manager
-// state. The hibernation-imminent phase (and the hibernation phase itself, in case we
-// race the transition) flips the alarm into the stricter armed-state profile.
 func (s *Subscriber) setupPowerManagerWatcher() {
 	s.powerManagerWatcher.OnField("state", func(stateStr string) error {
 		imminent := isHibernatingImminentState(stateStr)
@@ -416,10 +349,8 @@ func (s *Subscriber) setupPowerManagerWatcher() {
 	})
 }
 
-// Start starts all watchers with initial state sync and signals the FSM to
-// leave StateInit. StartWithSync delivers current field values via OnField
-// callbacks before returning, so the FSM receives AlarmModeChangedEvent and
-// VehicleStateChangedEvent before InitCompleteEvent — no separate read needed.
+// StartWithSync establishes all hash state before InitComplete, avoiding a
+// separate read and preserving FSM startup ordering.
 func (s *Subscriber) Start() error {
 	s.log.Info("starting hash watchers with initial sync")
 
@@ -465,9 +396,6 @@ func (s *Subscriber) Start() error {
 	return nil
 }
 
-// handleButtonEvent turns a `buttons` payload into a tamper trigger. Only the
-// pressed edge counts; releases are ignored so a single press produces one
-// trigger.
 func (s *Subscriber) handleButtonEvent(payload string) error {
 	source, edge, ok := parseButtonPayload(payload)
 	if !ok {
@@ -486,13 +414,8 @@ func (s *Subscriber) handleButtonEvent(payload string) error {
 	return nil
 }
 
-// parseButtonPayload recognizes the `buttons` payloads that count as tampering.
-// vehicle-service publishes "horn:on", "seatbox:on", "brake:left:on" and their
-// off counterparts on this channel, plus blinker edges. Blinkers are navigation
-// signals rather than tampering, so they fall through as unrecognized.
-//
-// Throttle never appears here. It only exists as an ECU CAN payload and the ECU
-// is powered down in Standby, so it cannot be a trigger source.
+// Only press edges from physical tamper controls count; blinkers share this
+// channel but are navigation signals, not alarm triggers.
 func parseButtonPayload(payload string) (fsm.TriggerSource, string, bool) {
 	parts := strings.Split(payload, ":")
 	switch len(parts) {
@@ -518,7 +441,6 @@ func parseButtonPayload(payload string) (fsm.TriggerSource, string, bool) {
 	return fsm.TriggerSourceUnknown, "", false
 }
 
-// Stop stops all watchers
 func (s *Subscriber) Stop() {
 	s.cancelHandlebarDwell()
 	if err := s.vehicleWatcher.Stop(); err != nil {

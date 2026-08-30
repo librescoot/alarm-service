@@ -1,65 +1,55 @@
 package fsm
 
-// Event represents an event that can trigger state transitions
 type Event interface {
 	Type() string
 }
 
-// InitCompleteEvent signals that BMX service is initialized
 type InitCompleteEvent struct{}
 
 func (e InitCompleteEvent) Type() string { return "init_complete" }
 
-// AlarmModeChangedEvent signals alarm mode enabled/disabled
 type AlarmModeChangedEvent struct {
 	Enabled bool
 }
 
 func (e AlarmModeChangedEvent) Type() string { return "alarm_mode_changed" }
 
-// HornSettingChangedEvent signals horn setting changed
 type HornSettingChangedEvent struct {
 	Enabled bool
 }
 
 func (e HornSettingChangedEvent) Type() string { return "horn_setting_changed" }
 
-// AlarmDurationChangedEvent signals alarm duration changed
 type AlarmDurationChangedEvent struct {
 	Duration int
 }
 
 func (e AlarmDurationChangedEvent) Type() string { return "alarm_duration_changed" }
 
-// HairTriggerSettingChangedEvent signals hair trigger mode enabled/disabled
 type HairTriggerSettingChangedEvent struct {
 	Enabled bool
 }
 
 func (e HairTriggerSettingChangedEvent) Type() string { return "hair_trigger_setting_changed" }
 
-// HairTriggerDurationChangedEvent signals hair trigger duration changed
 type HairTriggerDurationChangedEvent struct {
 	Duration int
 }
 
 func (e HairTriggerDurationChangedEvent) Type() string { return "hair_trigger_duration_changed" }
 
-// L1CooldownDurationChangedEvent signals L1 cooldown duration changed
 type L1CooldownDurationChangedEvent struct {
 	Duration int
 }
 
 func (e L1CooldownDurationChangedEvent) Type() string { return "l1_cooldown_duration_changed" }
 
-// VehicleStateChangedEvent signals vehicle state change
 type VehicleStateChangedEvent struct {
 	State VehicleState
 }
 
 func (e VehicleStateChangedEvent) Type() string { return "vehicle_state_changed" }
 
-// BMXInterruptEvent signals motion detected by BMX
 type BMXInterruptEvent struct {
 	Timestamp int64
 	Data      string
@@ -67,9 +57,6 @@ type BMXInterruptEvent struct {
 
 func (e BMXInterruptEvent) Type() string { return "bmx_interrupt" }
 
-// TriggerSource identifies which discrete input produced an InputTriggerEvent.
-// Motion and the seatbox lock keep their own event types; this covers the
-// remaining tamper inputs (handlebar buttons, brake levers, handlebar sensors).
 type TriggerSource int
 
 const (
@@ -101,114 +88,82 @@ func (s TriggerSource) String() string {
 	}
 }
 
-// isHandlebar reports whether the source is one of the two handlebar sensors.
-// Both hang off the same physical assembly and both see edges the vehicle
-// produces while locking itself, so they share the post-arm settling window.
 func (s TriggerSource) isHandlebar() bool {
 	return s == TriggerSourceHandlebarLock || s == TriggerSourceHandlebarPosition
 }
 
-// InputTriggerEvent signals tampering detected through a discrete input rather
-// than through motion. Escalates exactly like BMXInterruptEvent. The subscriber
-// only emits it when the matching alarm.trigger.* flag is on, so the FSM never
-// spends a cycle on a source the user opted out of.
 type InputTriggerEvent struct {
 	Source TriggerSource
 }
 
 func (e InputTriggerEvent) Type() string { return "input_trigger" }
 
-// MotionTriggerSettingChangedEvent signals alarm.trigger.motion changed. Motion
-// is gated in the FSM rather than in the subscriber because motion events also
-// carry the wake-from-hibernation stamp, which stays relevant with the trigger
-// off.
 type MotionTriggerSettingChangedEvent struct {
 	Enabled bool
 }
 
 func (e MotionTriggerSettingChangedEvent) Type() string { return "motion_trigger_setting_changed" }
 
-// RuntimeArmEvent forces the FSM to arm without changing alarm.enabled
 type RuntimeArmEvent struct{}
 
 func (e RuntimeArmEvent) Type() string { return "runtime_arm" }
 
-// RuntimeDisarmEvent forces the FSM to disarm without changing alarm.enabled
 type RuntimeDisarmEvent struct{}
 
 func (e RuntimeDisarmEvent) Type() string { return "runtime_disarm" }
 
-// DelayArmedTimerEvent signals delay armed timer expired
 type DelayArmedTimerEvent struct{}
 
 func (e DelayArmedTimerEvent) Type() string { return "delay_armed_timer" }
 
-// Level1CooldownTimerEvent signals level 1 cooldown complete
 type Level1CooldownTimerEvent struct{}
 
 func (e Level1CooldownTimerEvent) Type() string { return "level1_cooldown_timer" }
 
-// Level1CheckTimerEvent signals time to check for level 1 movement
 type Level1CheckTimerEvent struct{}
 
 func (e Level1CheckTimerEvent) Type() string { return "level1_check_timer" }
 
-// Level2CheckTimerEvent signals level 2 check complete
 type Level2CheckTimerEvent struct{}
 
 func (e Level2CheckTimerEvent) Type() string { return "level2_check_timer" }
 
-// HandlebarSettleTimerEvent signals the post-arm settling window has elapsed and
-// the handlebar sensors count as tamper sources again.
 type HandlebarSettleTimerEvent struct{}
 
 func (e HandlebarSettleTimerEvent) Type() string { return "handlebar_settle_timer" }
 
-// HibernateAfterWakeTimerEvent signals the post-hibernation-wake cooldown has elapsed
 type HibernateAfterWakeTimerEvent struct{}
 
 func (e HibernateAfterWakeTimerEvent) Type() string { return "hibernate_after_wake_timer" }
 
-// PostAlarmCooldownTimerEvent signals the quiet window after L2 exhaustion has elapsed.
-// Used to either re-arm or hand back to nRF52 hibernation, denying a "wait it out" attack
-// without letting a stuck/false alarm blare indefinitely.
 type PostAlarmCooldownTimerEvent struct{}
 
 func (e PostAlarmCooldownTimerEvent) Type() string { return "post_alarm_cooldown_timer" }
 
-// HibernationImminentEvent signals that pm-service is entering or leaving a
-// hibernation-imminent phase. When true, the armed-state BMX profile switches
-// to the stricter hibernation profile so the registers programmed across the
-// MDB power-down reject urban environmental vibration.
 type HibernationImminentEvent struct {
 	Imminent bool
 }
 
 func (e HibernationImminentEvent) Type() string { return "hibernation_imminent" }
 
-// ManualTriggerEvent signals manual alarm trigger
 type ManualTriggerEvent struct {
 	Duration int
 }
 
 func (e ManualTriggerEvent) Type() string { return "manual_trigger" }
 
-// SeatboxOpenedEvent signals authorized seatbox opening
 type SeatboxOpenedEvent struct{}
 
 func (e SeatboxOpenedEvent) Type() string { return "seatbox_opened" }
 
-// SeatboxClosedEvent signals seatbox was closed
 type SeatboxClosedEvent struct{}
 
 func (e SeatboxClosedEvent) Type() string { return "seatbox_closed" }
 
-// UnauthorizedSeatboxEvent signals unauthorized seatbox opening
 type UnauthorizedSeatboxEvent struct{}
 
 func (e UnauthorizedSeatboxEvent) Type() string { return "unauthorized_seatbox" }
 
-// VehicleState represents the vehicle state
 type VehicleState int
 
 const (
@@ -243,7 +198,6 @@ func (s VehicleState) String() string {
 	}
 }
 
-// ParseVehicleState parses a string to VehicleState
 func ParseVehicleState(s string) VehicleState {
 	switch s {
 	case "init":

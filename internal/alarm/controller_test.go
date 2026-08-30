@@ -55,7 +55,6 @@ func TestController_BlinkHazards(t *testing.T) {
 		t.Fatalf("BlinkHazards failed: %v", err)
 	}
 
-	// BlinkHazards is now async - it should return quickly
 	if duration > 100*time.Millisecond {
 		t.Errorf("BlinkHazards should return quickly (async), took %v", duration)
 	}
