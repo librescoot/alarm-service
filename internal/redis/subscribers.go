@@ -37,6 +37,7 @@ type Subscriber struct {
 	vehicleWatcher           *ipc.HashWatcher
 	settingsWatcher          *ipc.HashWatcher
 	powerManagerWatcher      *ipc.HashWatcher
+	usbWatcher               *ipc.HashWatcher
 	motionWatcher            *ipc.Subscription[string]
 	buttonsWatcher           *ipc.Subscription[string]
 	ipc                      *ipc.Client
@@ -67,6 +68,7 @@ func NewSubscriber(client *Client, sm *fsm.StateMachine, log *slog.Logger) *Subs
 		vehicleWatcher:      client.ipc.NewHashWatcher("vehicle"),
 		settingsWatcher:     client.ipc.NewHashWatcher("settings"),
 		powerManagerWatcher: client.ipc.NewHashWatcher("power-manager"),
+		usbWatcher:          client.ipc.NewHashWatcher("usb"),
 		ipc:                 client.ipc,
 		log:                 log,
 		sm:                  sm,
@@ -80,6 +82,7 @@ func NewSubscriber(client *Client, sm *fsm.StateMachine, log *slog.Logger) *Subs
 	s.setupVehicleWatcher()
 	s.setupSettingsWatcher()
 	s.setupPowerManagerWatcher()
+	s.setupUSBWatcher()
 
 	return s
 }
@@ -349,6 +352,21 @@ func (s *Subscriber) setupPowerManagerWatcher() {
 	})
 }
 
+// ums-by-dbc is the dashboard-initiated variant; both keep the gadget in mass
+// storage until the session ends.
+func isUMSMode(mode string) bool {
+	return mode == "ums" || mode == "ums-by-dbc"
+}
+
+func (s *Subscriber) setupUSBWatcher() {
+	s.usbWatcher.OnField("mode", func(mode string) error {
+		active := isUMSMode(mode)
+		s.log.Info("usb mode changed", "mode", mode, "ums_active", active)
+		s.sm.SendEvent(fsm.UMSModeChangedEvent{Active: active})
+		return nil
+	})
+}
+
 // StartWithSync establishes all hash state before InitComplete, avoiding a
 // separate read and preserving FSM startup ordering.
 func (s *Subscriber) Start() error {
@@ -364,6 +382,10 @@ func (s *Subscriber) Start() error {
 
 	if err := s.powerManagerWatcher.StartWithSync(); err != nil {
 		return fmt.Errorf("failed to start power-manager watcher: %w", err)
+	}
+
+	if err := s.usbWatcher.StartWithSync(); err != nil {
+		return fmt.Errorf("failed to start usb watcher: %w", err)
 	}
 
 	s.sm.SendEvent(fsm.InitCompleteEvent{})
@@ -451,6 +473,9 @@ func (s *Subscriber) Stop() {
 	}
 	if err := s.powerManagerWatcher.Stop(); err != nil {
 		s.log.Warn("failed to stop power-manager watcher", "error", err)
+	}
+	if err := s.usbWatcher.Stop(); err != nil {
+		s.log.Warn("failed to stop usb watcher", "error", err)
 	}
 	if s.motionWatcher != nil {
 		if err := s.motionWatcher.Unsubscribe(); err != nil {

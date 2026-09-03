@@ -27,13 +27,14 @@ Handlebar triggers are disabled by default. When enabled, the service ignores th
 
 ### Redis/Valkey contract
 
-The service connects to `--redis` (default `localhost:6379`). It uses Redis/Valkey hash-watch notifications for `vehicle`, `settings`, and `power-manager`; publishers must use the matching hash notification mechanism.
+The service connects to `--redis` (default `localhost:6379`). It uses Redis/Valkey hash-watch notifications for `vehicle`, `settings`, `power-manager`, and `usb`; publishers must use the matching hash notification mechanism.
 
 | Interface | Direction | Contract |
 |---|---|---|
 | `vehicle` hash | reads | `state`, `seatbox:lock`, `handlebar:lock-sensor`, and `handlebar:position`; `seatbox:opened` represents an authorized opening. |
 | `settings` hash | reads; CLI overrides write | `alarm.enabled`, `alarm.honk`, `alarm.duration`, `alarm.seatbox-trigger`, `alarm.hairtrigger`, `alarm.hairtrigger-duration`, `alarm.l1-cooldown`, `alarm.trigger.motion`, `alarm.trigger.buttons`, and `alarm.trigger.handlebar`. |
 | `power-manager` hash | reads | `state` controls hibernation preparation while the alarm is armed. |
+| `usb` hash | reads | `mode` of `ums` or `ums-by-dbc` suppresses the alarm for the duration of the mass-storage session. |
 | `motion:interrupt` | subscribes | JSON object with `type`, millisecond `timestamp`, and optional `engine`; normally published by motion-service. |
 | `motion` hash | reads and consumes | `wake-cause` is a one-shot millisecond timestamp. A valid value less than 30 seconds old is deleted after consumption. |
 | `buttons` | subscribes | `brake:left:on`, `brake:right:on`, `horn:on`, or `seatbox:on` are input triggers when button triggering is enabled. |
@@ -41,6 +42,10 @@ The service connects to `--redis` (default `localhost:6379`). It uses Redis/Valk
 | `scooter:horn`, `scooter:blinker` | pushes | Horn `on`/`off`; blinkers `both`/`off`. |
 | `scooter:power` | pushes | `hibernate-manual` after the wake cooldown. |
 | `power:inhibits` hash and channel | writes/publishes | A `block` inhibitor with ID `alarm-active`; add/remove notifications use `power:inhibits`. |
+
+### USB mass-storage sessions
+
+While `usb.mode` reads `ums` or `ums-by-dbc`, the state machine is held in `disarmed`: any transition that would arm the alarm or escalate a trigger is redirected there, an alarm already sounding is stopped, and the post-alarm cooldown does not re-arm. Plugging and unplugging the cable at the MDB shakes the vehicle enough to trip the motion engine, and that work is authorized. When the mode returns to `normal`, an enabled alarm on a scooter in stand-by re-arms through the usual five-second `delay_armed` window.
 
 `motion-service` derives its profile from `alarm.status` and `power-manager.state`. Before an armed scooter hibernates, alarm-service calls method `prepare-hibernation` on `motion:rpc`; motion-service must confirm that it has programmed `armed-hibernation`. If that RPC fails, the alarm service retains a power inhibitor to prevent hibernation with an unconfirmed sensor configuration.
 

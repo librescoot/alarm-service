@@ -63,6 +63,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(RuntimeArmEvent); ok && sm.alarmEnabled {
 			return StateDelayArmed
 		}
+		if e, ok := event.(UMSModeChangedEvent); ok && !e.Active && sm.alarmEnabled && sm.vehicleStandby {
+			return StateDelayArmed
+		}
 		if _, ok := event.(PostAlarmCooldownTimerEvent); ok && sm.alarmEnabled && sm.vehicleStandby {
 			return StateDelayArmed
 		}

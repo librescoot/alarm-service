@@ -97,6 +97,10 @@ type StateMachine struct {
 	motionTriggerEnabled bool
 
 	handlebarSettled bool
+
+	// UMS mass-storage sessions have the rider replugging USB at the MDB,
+	// which trips the motion engine while the work is authorized.
+	umsActive bool
 }
 
 type MotionRPC interface {
@@ -157,6 +161,7 @@ func New(
 		motionTriggerEnabled: true,
 
 		handlebarSettled: true,
+		umsActive:        false,
 	}
 }
 
@@ -254,6 +259,16 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 		return
 	}
 
+	if e, ok := event.(UMSModeChangedEvent); ok {
+		if sm.umsActive == e.Active {
+			return
+		}
+		sm.umsActive = e.Active
+		sm.log.Info("USB mass-storage mode changed", "active", e.Active)
+		// Fall through: the clamp below forces disarmed on entry, and the
+		// disarmed transition rule re-arms on exit.
+	}
+
 	if _, ok := event.(HandlebarSettleTimerEvent); ok {
 		sm.handlebarSettled = true
 		sm.log.Debug("handlebar settling window elapsed, handlebar triggers live again")
@@ -326,6 +341,13 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 		"state", oldState.String())
 
 	newState := sm.getTransition(event)
+
+	// Nothing may arm or escalate while the rider is handling the USB cable.
+	if sm.umsActive && newState != StateInit && newState != StateDisarmed && newState != StateWaitingEnabled {
+		sm.log.Info("suppressing alarm state change, USB mass-storage mode active",
+			"event", event.Type(), "from", oldState.String(), "requested", newState.String())
+		newState = StateDisarmed
+	}
 
 	if newState != oldState {
 

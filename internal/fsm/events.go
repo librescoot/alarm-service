@@ -104,6 +104,12 @@ type MotionTriggerSettingChangedEvent struct {
 
 func (e MotionTriggerSettingChangedEvent) Type() string { return "motion_trigger_setting_changed" }
 
+type UMSModeChangedEvent struct {
+	Active bool
+}
+
+func (e UMSModeChangedEvent) Type() string { return "ums_mode_changed" }
+
 type RuntimeArmEvent struct{}
 
 func (e RuntimeArmEvent) Type() string { return "runtime_arm" }

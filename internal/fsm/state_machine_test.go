@@ -1426,3 +1426,135 @@ func TestStateMachine_HandlebarWindowResetsOnRearm(t *testing.T) {
 		t.Errorf("expected the handlebar trigger to be dropped again, got %s", sm.State())
 	}
 }
+
+func TestStateMachine_UMSDisarmsFromArmed(t *testing.T) {
+	sm, _, pub, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+
+	sm.handleEvent(ctx, UMSModeChangedEvent{Active: true})
+
+	if sm.State() != StateDisarmed {
+		t.Errorf("expected StateDisarmed, got %s", sm.State())
+	}
+	if pub.lastStatus != "disarmed" {
+		t.Errorf("expected status 'disarmed', got %s", pub.lastStatus)
+	}
+	if _, ok := sm.timers["post_alarm_cooldown"]; ok {
+		t.Error("post-alarm cooldown must not re-arm while UMS is active")
+	}
+}
+
+func TestStateMachine_UMSStopsActiveAlarm(t *testing.T) {
+	sm, _, _, _, alarmCtrl := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateTriggerLevel2
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	alarmCtrl.active = true
+
+	sm.handleEvent(ctx, UMSModeChangedEvent{Active: true})
+
+	if sm.State() != StateDisarmed {
+		t.Errorf("expected StateDisarmed, got %s", sm.State())
+	}
+	if alarmCtrl.active {
+		t.Error("expected the alarm to be stopped when UMS mode starts")
+	}
+}
+
+func TestStateMachine_UMSBlocksRearm(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateDisarmed
+	sm.alarmEnabled = true
+	sm.umsActive = true
+
+	for _, event := range []Event{
+		VehicleStateChangedEvent{State: VehicleStateStandby},
+		RuntimeArmEvent{},
+		PostAlarmCooldownTimerEvent{},
+	} {
+		sm.handleEvent(ctx, event)
+		if sm.State() != StateDisarmed {
+			t.Fatalf("%s must not arm while UMS is active, got %s", event.Type(), sm.State())
+		}
+	}
+}
+
+func TestStateMachine_UMSBlocksEscalation(t *testing.T) {
+	sm, _, _, _, alarmCtrl := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateDisarmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.umsActive = true
+
+	sm.handleEvent(ctx, BMXInterruptEvent{Data: "edge"})
+
+	if sm.State() != StateDisarmed {
+		t.Errorf("expected motion to be ignored, got %s", sm.State())
+	}
+	if alarmCtrl.active {
+		t.Error("expected no alarm from motion while UMS is active")
+	}
+}
+
+func TestStateMachine_UMSExitRearmsWhenStandby(t *testing.T) {
+	sm, _, pub, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateDisarmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.umsActive = true
+
+	sm.handleEvent(ctx, UMSModeChangedEvent{Active: false})
+
+	if sm.State() != StateDelayArmed {
+		t.Errorf("expected StateDelayArmed, got %s", sm.State())
+	}
+	if pub.lastStatus != "delay-armed" {
+		t.Errorf("expected status 'delay-armed', got %s", pub.lastStatus)
+	}
+}
+
+func TestStateMachine_UMSExitStaysDisarmedWhenNotStandby(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateDisarmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = false
+	sm.umsActive = true
+
+	sm.handleEvent(ctx, UMSModeChangedEvent{Active: false})
+
+	if sm.State() != StateDisarmed {
+		t.Errorf("expected StateDisarmed, got %s", sm.State())
+	}
+}
+
+func TestStateMachine_UMSActiveAtInitDoesNotArm(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+
+	sm.handleEvent(ctx, UMSModeChangedEvent{Active: true})
+	if sm.State() != StateInit {
+		t.Fatalf("expected to stay in StateInit before init completes, got %s", sm.State())
+	}
+
+	sm.handleEvent(ctx, InitCompleteEvent{})
+	if sm.State() != StateDisarmed {
+		t.Errorf("expected StateDisarmed, got %s", sm.State())
+	}
+}
