@@ -1060,6 +1060,59 @@ func TestStateMachine_HibernationImminentBeforeArmedAppliesOnEntry(t *testing.T)
 	}
 }
 
+func TestStateMachine_TransientSeatboxStatePreservesWakeFromHibernation(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.wakeFromHibernation = true
+
+	// An alarm wake is often a forced seatbox open: waiting-seatbox is not the
+	// rider using the scooter, so the re-hibernate intent must survive.
+	sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateWaitingSeatbox})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateDisarmed {
+		t.Fatalf("expected StateDisarmed, got %s", sm.State())
+	}
+	if !sm.wakeFromHibernation {
+		t.Error("expected wakeFromHibernation to survive a transient waiting-seatbox disarm")
+	}
+
+	// Closed seatbox back to stand-by still reaches the arming path, where the
+	// re-hibernate cooldown runs.
+	sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateStandby})
+	sm.handleEvent(ctx, <-sm.events)
+	if sm.State() != StateDelayArmed {
+		t.Fatalf("expected StateDelayArmed after returning to stand-by, got %s", sm.State())
+	}
+	if !sm.wakeFromHibernation {
+		t.Error("expected wakeFromHibernation to still be set on re-arm")
+	}
+}
+
+func TestStateMachine_UserDrivingClearsWakeFromHibernation(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.wakeFromHibernation = true
+
+	sm.SendEvent(VehicleStateChangedEvent{State: VehicleStateReadyToDrive})
+	sm.handleEvent(ctx, <-sm.events)
+
+	if sm.State() != StateDisarmed {
+		t.Fatalf("expected StateDisarmed, got %s", sm.State())
+	}
+	if sm.wakeFromHibernation {
+		t.Error("expected wakeFromHibernation to be cleared when the rider drives off")
+	}
+}
+
 func TestStateMachine_UserDisarmClearsWakeFromHibernation(t *testing.T) {
 	sm, _, _, _, _ := createTestStateMachine()
 	ctx := context.Background()

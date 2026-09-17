@@ -11,6 +11,19 @@ func shouldDisarmForVehicleState(state VehicleState) bool {
 	}
 }
 
+// vehicleInUse reports whether the state means the rider is actually using the
+// scooter. Only those states cancel a pending post-wake re-hibernate; transient
+// states (waiting-seatbox, shutting-down, waiting-hibernation) must not, so an
+// alarm wake that lands there still goes back to hibernation once quiet.
+func vehicleInUse(state VehicleState) bool {
+	switch state {
+	case VehicleStateParked, VehicleStateReadyToDrive:
+		return true
+	default:
+		return false
+	}
+}
+
 func (sm *StateMachine) getTransition(event Event) State {
 	switch sm.state {
 	case StateInit:

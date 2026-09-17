@@ -81,6 +81,7 @@ type StateMachine struct {
 	timers              map[string]*time.Timer
 	alarmEnabled        bool
 	vehicleStandby      bool
+	lastVehicleState    VehicleState
 	level2Cycles        int
 	requestDisarm       bool
 	alarmDuration       int
@@ -223,6 +224,13 @@ func (sm *StateMachine) State() State {
 func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+
+	// Track the raw vehicle state so onEnterDisarmed can tell a transient
+	// non-stand-by state (waiting-seatbox) from the rider actually using the
+	// scooter. Only the latter cancels a pending post-wake re-hibernate.
+	if e, ok := event.(VehicleStateChangedEvent); ok {
+		sm.lastVehicleState = e.State
+	}
 
 	if e, ok := event.(HornSettingChangedEvent); ok {
 		sm.alarmController.SetHornEnabled(e.Enabled)

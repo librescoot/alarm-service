@@ -32,7 +32,10 @@ func (sm *StateMachine) onEnterDisarmed(ctx context.Context) {
 		sm.startTimer("post_alarm_cooldown", 5*time.Minute, func() {
 			sm.SendEvent(PostAlarmCooldownTimerEvent{})
 		})
-	} else {
+	} else if vehicleInUse(sm.lastVehicleState) {
+		// The rider is here; the wake-from-hibernation intent is spent. A
+		// transient non-stand-by state (e.g. waiting-seatbox after a forced
+		// open) keeps it so the scooter still returns to hibernation.
 		sm.wakeFromHibernation = false
 	}
 }
