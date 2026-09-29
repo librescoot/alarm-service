@@ -222,6 +222,7 @@ func TestStateMachine_ArmedToTriggerLevel1Wait(t *testing.T) {
 	sm.state = StateArmed
 	sm.alarmEnabled = true
 	sm.vehicleStandby = true
+	sm.hairTriggerEnabled = true
 
 	sm.SendEvent(BMXInterruptEvent{})
 	sm.handleEvent(ctx, <-sm.events)
@@ -234,8 +235,39 @@ func TestStateMachine_ArmedToTriggerLevel1Wait(t *testing.T) {
 		t.Error("expected suspend inhibitor to be acquired in level 1 wait")
 	}
 
+	if alarm.blinkCalled != 0 || alarm.active {
+		t.Error("expected the L1 cue to wait for the keycard grace period")
+	}
+
+	sm.SendEvent(Level1TriggerDelayTimerEvent{})
+	sm.handleEvent(ctx, <-sm.events)
+
 	if alarm.blinkCalled != 1 {
-		t.Errorf("expected hazards to blink once, got %d blinks", alarm.blinkCalled)
+		t.Errorf("expected hazards to blink once after the grace period, got %d blinks", alarm.blinkCalled)
+	}
+	if !alarm.active {
+		t.Error("expected hair-trigger alarm after the grace period")
+	}
+}
+
+func TestStateMachine_Level1CueStaysCancelledAfterUnlock(t *testing.T) {
+	sm, _, _, _, alarm := createTestStateMachine()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.hairTriggerEnabled = true
+
+	sm.handleEvent(ctx, BMXInterruptEvent{})
+	sm.handleEvent(ctx, VehicleStateChangedEvent{State: VehicleStateParked})
+	sm.handleEvent(ctx, Level1TriggerDelayTimerEvent{})
+
+	if sm.State() != StateDisarmed {
+		t.Errorf("expected StateDisarmed, got %s", sm.State())
+	}
+	if alarm.blinkCalled != 0 || alarm.active {
+		t.Error("expected unlock during the grace period to cancel the L1 cue")
 	}
 }
 
@@ -1234,8 +1266,8 @@ func TestStateMachine_ArmedInputTriggerEscalatesToL1Wait(t *testing.T) {
 	if !inh.acquired {
 		t.Error("expected inhibitor acquired in L1 wait")
 	}
-	if alarm.blinkCalled != 1 {
-		t.Errorf("expected hazards to blink once entering L1 wait, got %d", alarm.blinkCalled)
+	if alarm.blinkCalled != 0 {
+		t.Errorf("expected hazards to wait for the keycard grace period, got %d blinks", alarm.blinkCalled)
 	}
 }
 

@@ -95,18 +95,28 @@ func (sm *StateMachine) onExitArmed(_ context.Context) {
 }
 
 func (sm *StateMachine) onEnterTriggerLevel1Wait(ctx context.Context) {
-	sm.log.Info("entering trigger_level_1_wait state", "cooldown", sm.l1CooldownDuration)
+	sm.log.Info("entering trigger_level_1_wait state",
+		"cooldown", sm.l1CooldownDuration,
+		"trigger_delay", level1TriggerDelay)
 
 	if err := sm.inhibitor.Acquire("Level 1 cooldown"); err != nil {
 		sm.log.Error("failed to acquire inhibitor", "error", err)
 	}
 
+	sm.startTimer("level1_trigger_delay", level1TriggerDelay, func() {
+		sm.SendEvent(Level1TriggerDelayTimerEvent{})
+	})
+	sm.startTimer("level1_cooldown", time.Duration(sm.l1CooldownDuration)*time.Second, func() {
+		sm.SendEvent(Level1CooldownTimerEvent{})
+	})
+}
+
+func (sm *StateMachine) triggerLevel1Cue() {
 	if err := sm.alarmController.BlinkHazards(); err != nil {
 		sm.log.Error("failed to blink hazards", "error", err)
 	}
 
 	if sm.wakeFromHibernation {
-		// The waking edge is expected and must not immediately sound the alarm.
 		sm.log.Info("skipping hair trigger on hibernation-wake edge")
 	} else if sm.hairTriggerEnabled {
 		sm.log.Info("hair trigger active, starting short alarm", "duration", sm.hairTriggerDuration)
@@ -114,13 +124,10 @@ func (sm *StateMachine) onEnterTriggerLevel1Wait(ctx context.Context) {
 			sm.log.Error("failed to start hair-trigger alarm", "error", err)
 		}
 	}
-
-	sm.startTimer("level1_cooldown", time.Duration(sm.l1CooldownDuration)*time.Second, func() {
-		sm.SendEvent(Level1CooldownTimerEvent{})
-	})
 }
 
 func (sm *StateMachine) onExitTriggerLevel1Wait(ctx context.Context) {
+	sm.stopTimer("level1_trigger_delay")
 	sm.stopTimer("level1_cooldown")
 	if err := sm.alarmController.Stop(); err != nil {
 		sm.log.Error("failed to stop alarm", "error", err)

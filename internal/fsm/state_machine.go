@@ -61,6 +61,9 @@ func (s Sensitivity) String() string {
 // Bound an alarm episode so a stuck trigger cannot sound indefinitely.
 const maxLevel2Cycles = 6
 
+// Gives an in-progress NFC tap time to disarm before the L1 cue.
+const level1TriggerDelay = 750 * time.Millisecond
+
 // Vehicle lock actuation creates handlebar edges; keep only those sensors muted
 // until its positioning retries finish. Other tamper sources remain live.
 const handlebarSettleDelay = 90 * time.Second
@@ -324,6 +327,13 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 			return
 		}
 
+	}
+
+	if _, ok := event.(Level1TriggerDelayTimerEvent); ok {
+		if sm.state == StateTriggerLevel1Wait {
+			sm.triggerLevel1Cue()
+		}
+		return
 	}
 
 	// Disabled motion must not alarm, but a hibernation wake still needs its

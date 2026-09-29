@@ -122,6 +122,10 @@ type DelayArmedTimerEvent struct{}
 
 func (e DelayArmedTimerEvent) Type() string { return "delay_armed_timer" }
 
+type Level1TriggerDelayTimerEvent struct{}
+
+func (e Level1TriggerDelayTimerEvent) Type() string { return "level1_trigger_delay_timer" }
+
 type Level1CooldownTimerEvent struct{}
 
 func (e Level1CooldownTimerEvent) Type() string { return "level1_cooldown_timer" }

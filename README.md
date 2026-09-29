@@ -21,7 +21,7 @@ Part of the [Librescoot](https://librescoot.org/) open-source platform.
 
 The primary status values published as `alarm.status` are `disabled`, `disarmed`, `delay-armed`, `armed`, `level-1-triggered`, `level-2-triggered`, and `seatbox-access`.
 
-When armed, a motion or enabled input trigger enters a configurable level-1 cooldown (15 seconds by default) and then a five-second level-1 check. A subsequent tamper event escalates to level 2. An unauthorized seatbox opening escalates directly to level 2. Level 2 runs for 50-second checks and can repeat on further tamper events, up to six cycles. Disarming is driven by the vehicle leaving standby, disabling the alarm, or a runtime disarm command.
+When armed, a motion or enabled input trigger enters a configurable level-1 cooldown (15 seconds by default). The hazard cue and optional hair-trigger alarm wait 750 milliseconds, allowing an in-progress keycard or phone authentication to disarm the vehicle first; disarming during that grace period cancels the cue. After the cooldown, the service starts a five-second level-1 check. A subsequent tamper event escalates to level 2. An unauthorized seatbox opening escalates directly to level 2. Level 2 runs for 50-second checks and can repeat on further tamper events, up to six cycles. Disarming is driven by the vehicle leaving standby, disabling the alarm, or a runtime disarm command.
 
 Handlebar triggers are disabled by default. When enabled, the service ignores the initial field value after startup, suppresses handlebar inputs for 90 seconds after arming, and requires `handlebar:position` to remain `off-place` for one second. These guards do not apply to motion, buttons, or seatbox triggers.
 
