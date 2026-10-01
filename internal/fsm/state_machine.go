@@ -68,6 +68,8 @@ const level1TriggerDelay = 750 * time.Millisecond
 // until its positioning retries finish. Other tamper sources remain live.
 const handlebarSettleDelay = 90 * time.Second
 
+const runtimeDisarmDuration = 8 * time.Hour
+
 type StateMachine struct {
 	mu     sync.RWMutex
 	state  State
@@ -94,8 +96,10 @@ type StateMachine struct {
 	preSeatboxState     State
 	seatboxLockClosed   bool
 	// A durable motion wake is consumed once and drives safe re-hibernation.
-	wakeFromHibernation bool
-	hibernationImminent bool
+	wakeFromHibernation   bool
+	hibernationImminent   bool
+	runtimeDisarmed       bool
+	runtimeDisarmSawInUse bool
 
 	// Motion stays in the FSM so its wake stamp survives a disabled trigger.
 	motionTriggerEnabled bool
@@ -216,6 +220,8 @@ func (sm *StateMachine) SendEvent(event Event) {
 
 func (sm *StateMachine) RuntimeArm() { sm.SendEvent(RuntimeArmEvent{}) }
 
+func (sm *StateMachine) RuntimeStop() { sm.SendEvent(RuntimeStopEvent{}) }
+
 func (sm *StateMachine) RuntimeDisarm() { sm.SendEvent(RuntimeDisarmEvent{}) }
 
 func (sm *StateMachine) State() State {
@@ -233,6 +239,37 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 	// scooter. Only the latter cancels a pending post-wake re-hibernate.
 	if e, ok := event.(VehicleStateChangedEvent); ok {
 		sm.lastVehicleState = e.State
+		if sm.runtimeDisarmed && vehicleInUse(e.State) {
+			sm.runtimeDisarmSawInUse = true
+		}
+	}
+
+	if _, ok := event.(RuntimeDisarmEvent); ok && sm.alarmEnabled {
+		sm.runtimeDisarmed = true
+		sm.runtimeDisarmSawInUse = vehicleInUse(sm.lastVehicleState)
+		sm.stopTimer("post_alarm_cooldown")
+		sm.startTimer("runtime_disarm", runtimeDisarmDuration, func() {
+			sm.SendEvent(RuntimeDisarmTimerEvent{})
+		})
+		sm.log.Info("runtime disarm started", "duration", runtimeDisarmDuration)
+	}
+
+	if _, ok := event.(RuntimeArmEvent); ok {
+		sm.clearRuntimeDisarm("runtime arm")
+	}
+
+	if e, ok := event.(AlarmModeChangedEvent); ok && !e.Enabled {
+		sm.clearRuntimeDisarm("alarm disabled")
+	}
+
+	if _, ok := event.(RuntimeDisarmTimerEvent); ok {
+		if !sm.runtimeDisarmed {
+			return
+		}
+		sm.clearRuntimeDisarm("maximum duration elapsed")
+		if sm.state != StateDisarmed || !sm.alarmEnabled || !sm.vehicleStandby || sm.umsActive {
+			return
+		}
 	}
 
 	if e, ok := event.(HornSettingChangedEvent); ok {
@@ -287,15 +324,24 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 	}
 
 	if e, ok := event.(HibernationImminentEvent); ok {
-		if sm.hibernationImminent == e.Imminent {
+		changed := sm.hibernationImminent != e.Imminent
+		sm.hibernationImminent = e.Imminent
+		if changed {
+			sm.log.Info("hibernation-imminent flag updated", "imminent", e.Imminent)
+		}
+		if e.Imminent && sm.runtimeDisarmed {
+			sm.clearRuntimeDisarm("hibernation started")
+			if sm.state == StateDisarmed && sm.alarmEnabled && sm.vehicleStandby && !sm.umsActive {
+				// Enter Armed before suspend so motion-service can confirm its profile.
+			} else {
+				return
+			}
+		} else {
+			if e.Imminent && sm.state == StateArmed && changed {
+				sm.confirmHibernationProfile(ctx)
+			}
 			return
 		}
-		sm.hibernationImminent = e.Imminent
-		sm.log.Info("hibernation-imminent flag updated", "imminent", e.Imminent)
-		if e.Imminent && sm.state == StateArmed {
-			sm.confirmHibernationProfile(ctx)
-		}
-		return
 	}
 
 	if _, ok := event.(HibernateAfterWakeTimerEvent); ok {
@@ -310,7 +356,7 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 	}
 
 	if _, ok := event.(PostAlarmCooldownTimerEvent); ok {
-		if sm.state != StateDisarmed || !sm.alarmEnabled || !sm.vehicleStandby {
+		if sm.state != StateDisarmed || !sm.alarmEnabled || !sm.vehicleStandby || sm.runtimeDisarmed {
 			return
 		}
 		if sm.wakeFromHibernation {
@@ -462,6 +508,16 @@ func (sm *StateMachine) stopTimer(name string) {
 		delete(sm.timers, name)
 		sm.log.Debug("stopped timer", "name", name)
 	}
+}
+
+func (sm *StateMachine) clearRuntimeDisarm(reason string) {
+	if !sm.runtimeDisarmed {
+		return
+	}
+	sm.runtimeDisarmed = false
+	sm.runtimeDisarmSawInUse = false
+	sm.stopTimer("runtime_disarm")
+	sm.log.Info("runtime disarm ended", "reason", reason)
 }
 
 func (sm *StateMachine) cleanupTimers() {

@@ -114,9 +114,17 @@ type RuntimeArmEvent struct{}
 
 func (e RuntimeArmEvent) Type() string { return "runtime_arm" }
 
+type RuntimeStopEvent struct{}
+
+func (e RuntimeStopEvent) Type() string { return "runtime_stop" }
+
 type RuntimeDisarmEvent struct{}
 
 func (e RuntimeDisarmEvent) Type() string { return "runtime_disarm" }
+
+type RuntimeDisarmTimerEvent struct{}
+
+func (e RuntimeDisarmTimerEvent) Type() string { return "runtime_disarm_timer" }
 
 type DelayArmedTimerEvent struct{}
 

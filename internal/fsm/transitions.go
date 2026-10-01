@@ -65,9 +65,17 @@ func (sm *StateMachine) getTransition(event Event) State {
 		}
 
 	case StateDisarmed:
-		if e, ok := event.(VehicleStateChangedEvent); ok && e.State == VehicleStateStandby {
-			sm.vehicleStandby = true
-			return StateDelayArmed
+		if e, ok := event.(VehicleStateChangedEvent); ok {
+			sm.vehicleStandby = e.State == VehicleStateStandby
+			if e.State == VehicleStateStandby {
+				if sm.runtimeDisarmed {
+					if !sm.runtimeDisarmSawInUse {
+						return StateDisarmed
+					}
+					sm.clearRuntimeDisarm("vehicle parked")
+				}
+				return StateDelayArmed
+			}
 		}
 		if e, ok := event.(AlarmModeChangedEvent); ok && !e.Enabled {
 			sm.alarmEnabled = false
@@ -79,8 +87,14 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if e, ok := event.(UMSModeChangedEvent); ok && !e.Active && sm.alarmEnabled && sm.vehicleStandby {
 			return StateDelayArmed
 		}
-		if _, ok := event.(PostAlarmCooldownTimerEvent); ok && sm.alarmEnabled && sm.vehicleStandby {
+		if _, ok := event.(PostAlarmCooldownTimerEvent); ok && sm.alarmEnabled && sm.vehicleStandby && !sm.runtimeDisarmed {
 			return StateDelayArmed
+		}
+		if _, ok := event.(RuntimeDisarmTimerEvent); ok && sm.alarmEnabled && sm.vehicleStandby {
+			return StateDelayArmed
+		}
+		if e, ok := event.(HibernationImminentEvent); ok && e.Imminent && sm.alarmEnabled && sm.vehicleStandby {
+			return StateArmed
 		}
 
 	case StateDelayArmed:
@@ -139,6 +153,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		}
 
 	case StateTriggerLevel1Wait:
+		if _, ok := event.(RuntimeStopEvent); ok {
+			return StateDisarmed
+		}
 		if _, ok := event.(SeatboxOpenedEvent); ok {
 			sm.preSeatboxState = StateTriggerLevel1Wait
 			return StateSeatboxAccess
@@ -162,6 +179,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		}
 
 	case StateTriggerLevel1:
+		if _, ok := event.(RuntimeStopEvent); ok {
+			return StateDisarmed
+		}
 		if _, ok := event.(SeatboxOpenedEvent); ok {
 			sm.preSeatboxState = StateTriggerLevel1
 			return StateSeatboxAccess
@@ -188,6 +208,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		}
 
 	case StateTriggerLevel2:
+		if _, ok := event.(RuntimeStopEvent); ok {
+			return StateDisarmed
+		}
 		if _, ok := event.(Level2CheckTimerEvent); ok {
 			if sm.level2Cycles >= maxLevel2Cycles {
 				return StateDisarmed
@@ -207,6 +230,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		}
 
 	case StateWaitingMovement:
+		if _, ok := event.(RuntimeStopEvent); ok {
+			return StateDisarmed
+		}
 		if _, ok := event.(Level2CheckTimerEvent); ok {
 			return StateDelayArmed
 		}

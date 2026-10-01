@@ -13,6 +13,7 @@ import (
 
 type RuntimeCommander interface {
 	RuntimeArm()
+	RuntimeStop()
 	RuntimeDisarm()
 }
 
@@ -275,6 +276,10 @@ func (c *Controller) handleCommand(cmd string) {
 		if err := c.Stop(); err != nil {
 			c.log.Error("failed to stop alarm", "error", err)
 		}
+		if c.commander != nil {
+			c.commander.RuntimeStop()
+			c.log.Info("runtime alarm stop requested")
+		}
 		return
 	case "enable":
 		if err := c.settingsPub.Set("alarm.enabled", "true"); err != nil {
@@ -283,6 +288,9 @@ func (c *Controller) handleCommand(cmd string) {
 		c.log.Info("alarm enabled via command")
 		return
 	case "disable":
+		if err := c.Stop(); err != nil {
+			c.log.Error("failed to stop alarm", "error", err)
+		}
 		if err := c.settingsPub.Set("alarm.enabled", "false"); err != nil {
 			c.log.Error("failed to disable alarm", "error", err)
 		}
@@ -295,6 +303,9 @@ func (c *Controller) handleCommand(cmd string) {
 		}
 		return
 	case "disarm":
+		if err := c.Stop(); err != nil {
+			c.log.Error("failed to stop alarm", "error", err)
+		}
 		if c.commander != nil {
 			c.commander.RuntimeDisarm()
 			c.log.Info("runtime disarm requested")

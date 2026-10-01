@@ -889,6 +889,105 @@ func TestStateMachine_RuntimeDisarmThenRearmOnStandby(t *testing.T) {
 	}
 }
 
+func TestStateMachine_RuntimeDisarmWaitsForNextPark(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	defer sm.cleanupTimers()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.lastVehicleState = VehicleStateStandby
+
+	sm.handleEvent(ctx, RuntimeDisarmEvent{})
+	if !sm.runtimeDisarmed {
+		t.Fatal("expected runtime disarm to remain active")
+	}
+	if _, ok := sm.timers["post_alarm_cooldown"]; ok {
+		t.Fatal("runtime disarm must not start the post-alarm cooldown")
+	}
+
+	sm.handleEvent(ctx, VehicleStateChangedEvent{State: VehicleStateStandby})
+	if sm.State() != StateDisarmed {
+		t.Fatalf("repeated stand-by must not re-arm, got %s", sm.State())
+	}
+
+	sm.handleEvent(ctx, VehicleStateChangedEvent{State: VehicleStateReadyToDrive})
+	sm.handleEvent(ctx, VehicleStateChangedEvent{State: VehicleStateStandby})
+	if sm.State() != StateDelayArmed {
+		t.Errorf("expected StateDelayArmed after the next park, got %s", sm.State())
+	}
+	if sm.runtimeDisarmed {
+		t.Error("expected runtime disarm to end after the next park")
+	}
+}
+
+func TestStateMachine_RuntimeDisarmExpiresAfterMaximumDuration(t *testing.T) {
+	sm, _, _, _, _ := createTestStateMachine()
+	defer sm.cleanupTimers()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.handleEvent(ctx, RuntimeDisarmEvent{})
+	sm.handleEvent(ctx, RuntimeDisarmTimerEvent{})
+
+	if sm.State() != StateDelayArmed {
+		t.Errorf("expected StateDelayArmed after runtime disarm expiry, got %s", sm.State())
+	}
+	if sm.runtimeDisarmed {
+		t.Error("expected runtime disarm to be cleared after expiry")
+	}
+}
+
+func TestStateMachine_HibernationEndsRuntimeDisarm(t *testing.T) {
+	sm, motion, _, _, _ := createTestStateMachine()
+	defer sm.cleanupTimers()
+	ctx := context.Background()
+
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	sm.handleEvent(ctx, RuntimeDisarmEvent{})
+	sm.handleEvent(ctx, HibernationImminentEvent{Imminent: true})
+
+	if sm.State() != StateArmed {
+		t.Errorf("expected StateArmed when hibernation starts, got %s", sm.State())
+	}
+	if sm.runtimeDisarmed {
+		t.Error("expected hibernation to clear runtime disarm")
+	}
+	if motion.prepareCalls != 1 {
+		t.Errorf("expected hibernation profile preparation once, got %d", motion.prepareCalls)
+	}
+}
+
+func TestStateMachine_RuntimeStopUsesPostAlarmCooldown(t *testing.T) {
+	sm, _, _, _, alarm := createTestStateMachine()
+	defer sm.cleanupTimers()
+	ctx := context.Background()
+
+	sm.state = StateTriggerLevel2
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	alarm.active = true
+	sm.handleEvent(ctx, RuntimeStopEvent{})
+
+	if sm.State() != StateDisarmed {
+		t.Errorf("expected StateDisarmed after stop, got %s", sm.State())
+	}
+	if alarm.active {
+		t.Error("expected running alarm to stop")
+	}
+	if sm.runtimeDisarmed {
+		t.Error("stop must not activate runtime disarm")
+	}
+	if _, ok := sm.timers["post_alarm_cooldown"]; !ok {
+		t.Error("expected post-alarm cooldown after stop")
+	}
+}
+
 func TestStateMachine_RuntimeArmFromDisarmed(t *testing.T) {
 	sm, _, _, inh, _ := createTestStateMachine()
 	ctx := context.Background()

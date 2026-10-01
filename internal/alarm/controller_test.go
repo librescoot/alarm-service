@@ -90,6 +90,28 @@ func TestController_HornDisabled(t *testing.T) {
 	}
 }
 
+type fakeRuntimeCommander struct {
+	stopped bool
+}
+
+func (f *fakeRuntimeCommander) RuntimeArm()    {}
+func (f *fakeRuntimeCommander) RuntimeStop()   { f.stopped = true }
+func (f *fakeRuntimeCommander) RuntimeDisarm() {}
+
+func TestController_HandleCommandStopNotifiesStateMachine(t *testing.T) {
+	commander := &fakeRuntimeCommander{}
+	controller := &Controller{
+		commander: commander,
+		log:       slog.New(slog.NewTextHandler(os.Stdout, nil)),
+	}
+
+	controller.handleCommand("stop")
+
+	if !commander.stopped {
+		t.Error("expected stop command to notify the state machine")
+	}
+}
+
 func TestController_HandleCommand_StartWithDuration(t *testing.T) {
 	c, client := setupTestController(t, true)
 	defer client.Close()

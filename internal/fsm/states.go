@@ -27,7 +27,7 @@ func (sm *StateMachine) onEnterDisarmed(ctx context.Context) {
 
 	// L2 exhaustion gets a quiet safety window, then re-arms so an attacker
 	// cannot simply wait out the alarm.
-	if sm.vehicleStandby && sm.alarmEnabled && !sm.umsActive {
+	if sm.vehicleStandby && sm.alarmEnabled && !sm.umsActive && !sm.runtimeDisarmed {
 		sm.log.Info("post-alarm cooldown started", "duration", "5m", "wake_from_hibernation", sm.wakeFromHibernation)
 		sm.startTimer("post_alarm_cooldown", 5*time.Minute, func() {
 			sm.SendEvent(PostAlarmCooldownTimerEvent{})

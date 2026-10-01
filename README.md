@@ -21,7 +21,7 @@ Part of the [Librescoot](https://librescoot.org/) open-source platform.
 
 The primary status values published as `alarm.status` are `disabled`, `disarmed`, `delay-armed`, `armed`, `level-1-triggered`, `level-2-triggered`, and `seatbox-access`.
 
-When armed, a motion or enabled input trigger enters a configurable level-1 cooldown (15 seconds by default). The hazard cue and optional hair-trigger alarm wait 750 milliseconds, allowing an in-progress keycard or phone authentication to disarm the vehicle first; disarming during that grace period cancels the cue. After the cooldown, the service starts a five-second level-1 check. A subsequent tamper event escalates to level 2. An unauthorized seatbox opening escalates directly to level 2. Level 2 runs for 50-second checks and can repeat on further tamper events, up to six cycles. Disarming is driven by the vehicle leaving standby, disabling the alarm, or a runtime disarm command.
+When armed, a motion or enabled input trigger enters a configurable level-1 cooldown (15 seconds by default). The hazard cue and optional hair-trigger alarm wait 750 milliseconds, allowing an in-progress keycard or phone authentication to disarm the vehicle first; disarming during that grace period cancels the cue. After the cooldown, the service starts a five-second level-1 check. A subsequent tamper event escalates to level 2. An unauthorized seatbox opening escalates directly to level 2. Level 2 runs for 50-second checks and can repeat on further tamper events, up to six cycles. Leaving standby normally disarms the alarm until the scooter is parked again. A runtime disarm remains in effect until the next park cycle, hibernation starts, or eight hours elapse.
 
 Handlebar triggers are disabled by default. When enabled, the service ignores the initial field value after startup, suppresses handlebar inputs for 90 seconds after arming, and requires `handlebar:position` to remain `off-place` for one second. These guards do not apply to motion, buttons, or seatbox triggers.
 
@@ -62,7 +62,7 @@ redis-cli LPUSH scooter:alarm stop
 redis-cli LPUSH scooter:alarm start:30
 ```
 
-`enable` and `disable` write `settings.alarm.enabled`. `arm` and `disarm` are runtime state-machine commands and do not change that setting. `start:<seconds>` directly starts the horn/blinker controller.
+`enable` and `disable` write `settings.alarm.enabled`; disabling persists until an explicit enable. `stop` silences a running alarm and returns it to the armed state after the five-minute post-alarm cooldown. `disarm` also silences a running alarm, but keeps the enabled alarm disarmed until the scooter is next parked, hibernation starts, or eight hours elapse. `arm` and `disarm` do not change the persistent setting. `start:<seconds>` directly starts the horn/blinker controller.
 
 ## Configuration
 
