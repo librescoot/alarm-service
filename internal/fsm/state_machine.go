@@ -93,6 +93,11 @@ type StateMachine struct {
 	hairTriggerEnabled  bool
 	hairTriggerDuration int
 	l1CooldownDuration  int
+	quietTime           int
+	lastDisturbance     time.Time
+	quietElapsed        bool
+	quietGeneration     uint64
+	burstGeneration     uint64
 	preSeatboxState     State
 	seatboxLockClosed   bool
 	// A durable motion wake is consumed once and drives safe re-hibernation.
@@ -163,6 +168,7 @@ func New(
 		hairTriggerEnabled:  false,
 		hairTriggerDuration: 3,
 		l1CooldownDuration:  2,
+		quietTime:           30,
 		preSeatboxState:     StateInit,
 		seatboxLockClosed:   true,
 
@@ -297,7 +303,20 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 
 	if e, ok := event.(L1CooldownDurationChangedEvent); ok {
 		sm.l1CooldownDuration = e.Duration
-		sm.log.Info("L1 cooldown duration updated", "duration", e.Duration)
+		sm.log.Info("L2 escalation delay updated", "duration", e.Duration)
+		return
+	}
+
+	if e, ok := event.(QuietTimeChangedEvent); ok {
+		if e.Duration < 1 || e.Duration > 300 {
+			sm.log.Warn("invalid alarm quiet time", "seconds", e.Duration)
+			return
+		}
+		sm.quietTime = e.Duration
+		sm.log.Info("quiet time before rearming updated", "seconds", e.Duration)
+		if alarmEpisodeState(sm.state) {
+			sm.scheduleQuietTimer()
+		}
 		return
 	}
 
@@ -399,6 +418,19 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 		return
 	}
 
+	if e, ok := event.(QuietTimerEvent); ok {
+		if !alarmEpisodeState(sm.state) || e.Generation != sm.quietGeneration {
+			return
+		}
+		sm.quietElapsed = true
+		sm.log.Info("alarm quiet interval elapsed", "seconds", sm.quietTime)
+	}
+	if e, ok := event.(AlarmBurstTimerEvent); ok {
+		if sm.state != StateTriggerLevel2 || e.Generation != sm.burstGeneration {
+			return
+		}
+	}
+
 	oldState := sm.state
 	sm.log.Debug("handling event",
 		"event", event.Type(),
@@ -411,6 +443,24 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 		sm.log.Info("suppressing alarm state change, USB mass-storage mode active",
 			"event", event.Type(), "from", oldState.String(), "requested", newState.String())
 		newState = StateDisarmed
+	}
+
+	if alarmEpisodeState(newState) {
+		if !alarmEpisodeState(oldState) {
+			sm.level2Cycles = 0
+		}
+		_, disturbance := triggerSourceOf(event)
+		if _, manual := event.(ManualTriggerEvent); manual {
+			disturbance = true
+		}
+		if !alarmEpisodeState(oldState) || disturbance {
+			sm.lastDisturbance = time.Now()
+			sm.scheduleQuietTimer()
+		}
+	} else if alarmEpisodeState(oldState) {
+		sm.stopTimer("quiet")
+		sm.quietGeneration++
+		sm.lastDisturbance = time.Time{}
 	}
 
 	if newState != oldState {
@@ -487,6 +537,25 @@ func (sm *StateMachine) confirmHibernationProfile(ctx context.Context) {
 		return
 	}
 	sm.log.Info("motion-service confirmed armed-hibernation profile")
+}
+
+func alarmEpisodeState(state State) bool {
+	switch state {
+	case StateTriggerLevel1Wait, StateTriggerLevel1, StateTriggerLevel2, StateWaitingMovement:
+		return true
+	}
+	return false
+}
+
+func (sm *StateMachine) scheduleQuietTimer() {
+	sm.quietElapsed = false
+	sm.quietGeneration++
+	generation := sm.quietGeneration
+	delay := time.Until(sm.lastDisturbance.Add(time.Duration(sm.quietTime) * time.Second))
+	// A queued expiry from before a disturbance must not end the renewed episode.
+	sm.startTimer("quiet", delay, func() {
+		sm.SendEvent(QuietTimerEvent{Generation: generation})
+	})
 }
 
 func (sm *StateMachine) startTimer(name string, duration time.Duration, callback func()) {

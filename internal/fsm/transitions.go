@@ -153,6 +153,9 @@ func (sm *StateMachine) getTransition(event Event) State {
 		}
 
 	case StateTriggerLevel1Wait:
+		if _, ok := event.(QuietTimerEvent); ok {
+			return StateArmed
+		}
 		if _, ok := event.(RuntimeStopEvent); ok {
 			return StateDisarmed
 		}
@@ -189,8 +192,8 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(UnauthorizedSeatboxEvent); ok {
 			return StateTriggerLevel2
 		}
-		if _, ok := event.(Level1CheckTimerEvent); ok {
-			return StateDelayArmed
+		if _, ok := event.(QuietTimerEvent); ok {
+			return StateArmed
 		}
 		if isTamperTrigger(event) {
 			return StateTriggerLevel2
@@ -211,7 +214,10 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(RuntimeStopEvent); ok {
 			return StateDisarmed
 		}
-		if _, ok := event.(Level2CheckTimerEvent); ok {
+		if _, ok := event.(AlarmBurstTimerEvent); ok {
+			if sm.quietElapsed {
+				return StateArmed
+			}
 			if sm.level2Cycles >= maxLevel2Cycles {
 				return StateDisarmed
 			}
@@ -233,11 +239,11 @@ func (sm *StateMachine) getTransition(event Event) State {
 		if _, ok := event.(RuntimeStopEvent); ok {
 			return StateDisarmed
 		}
-		if _, ok := event.(Level2CheckTimerEvent); ok {
-			return StateDelayArmed
+		if _, ok := event.(QuietTimerEvent); ok {
+			return StateArmed
 		}
-		if isTamperTrigger(event) {
-			sm.level2Cycles++
+		_, seatbox := event.(UnauthorizedSeatboxEvent)
+		if isTamperTrigger(event) || seatbox {
 			if sm.level2Cycles >= maxLevel2Cycles {
 				return StateDisarmed
 			}
@@ -311,8 +317,6 @@ func (sm *StateMachine) exitState(ctx context.Context, state State) {
 		sm.onExitArmed(ctx)
 	case StateTriggerLevel1Wait:
 		sm.onExitTriggerLevel1Wait(ctx)
-	case StateTriggerLevel1:
-		sm.onExitTriggerLevel1(ctx)
 	case StateTriggerLevel2:
 		sm.onExitTriggerLevel2(ctx)
 	case StateWaitingMovement:

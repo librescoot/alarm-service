@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -249,7 +250,18 @@ func (s *Subscriber) fireHandlebarDwell(gen uint64) {
 	s.sm.SendEvent(fsm.InputTriggerEvent{Source: fsm.TriggerSourceHandlebarPosition})
 }
 
+func (s *Subscriber) handleQuietTime(value string) error {
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds < 1 || seconds > 300 {
+		s.log.Warn("invalid alarm.quiet-time; keeping current value", "value", value)
+		return nil
+	}
+	s.sm.SendEvent(fsm.QuietTimeChangedEvent{Duration: seconds})
+	return nil
+}
+
 func (s *Subscriber) setupSettingsWatcher() {
+	s.settingsWatcher.OnField("alarm.quiet-time", s.handleQuietTime)
 	s.settingsWatcher.OnField("alarm.enabled", func(alarmEnabled string) error {
 		enabled := alarmEnabled == "true"
 		s.log.Debug("alarm enabled changed", "enabled", enabled)
@@ -316,7 +328,7 @@ func (s *Subscriber) setupSettingsWatcher() {
 			s.log.Error("invalid alarm.l1-cooldown value", "value", durationStr, "error", err)
 			return nil
 		}
-		s.log.Debug("L1 cooldown duration changed", "duration", duration)
+		s.log.Debug("L2 escalation delay changed", "duration", duration)
 		s.sm.SendEvent(fsm.L1CooldownDurationChangedEvent{Duration: duration})
 		return nil
 	})

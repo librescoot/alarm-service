@@ -272,7 +272,7 @@ func TestStateMachine_TwoSecondCooldownThenRepeatMotionEscalates(t *testing.T) {
 	}
 	sm.handleEvent(ctx, Level1CooldownTimerEvent{})
 	if sm.State() != StateTriggerLevel1 {
-		t.Fatal("cooldown expiry must open the five-second check")
+		t.Fatal("escalation delay expiry must allow L2 until quiet time expires")
 	}
 	sm.handleEvent(ctx, BMXInterruptEvent{})
 	if sm.State() != StateTriggerLevel2 || !alarm.active {
@@ -414,17 +414,17 @@ func TestStateMachine_Level1ToLevel2OnMovement(t *testing.T) {
 	}
 }
 
-func TestStateMachine_Level1ToDelayArmedOnTimeout(t *testing.T) {
+func TestStateMachine_Level1ReturnsDirectlyToArmedAfterQuiet(t *testing.T) {
 	sm, _, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
 
 	sm.state = StateTriggerLevel1
 
-	sm.SendEvent(Level1CheckTimerEvent{})
+	sm.SendEvent(QuietTimerEvent{Generation: sm.quietGeneration})
 	sm.handleEvent(ctx, <-sm.events)
 
-	if sm.State() != StateDelayArmed {
-		t.Errorf("expected StateDelayArmed, got %s", sm.State())
+	if sm.State() != StateArmed {
+		t.Errorf("expected StateArmed without another arming delay, got %s", sm.State())
 	}
 }
 
@@ -435,7 +435,7 @@ func TestStateMachine_Level2ToWaitingMovement(t *testing.T) {
 	sm.state = StateTriggerLevel2
 	sm.level2Cycles = 0
 
-	sm.SendEvent(Level2CheckTimerEvent{})
+	sm.SendEvent(AlarmBurstTimerEvent{Generation: sm.burstGeneration})
 	sm.handleEvent(ctx, <-sm.events)
 
 	if sm.State() != StateWaitingMovement {
@@ -450,7 +450,7 @@ func TestStateMachine_Level2ToDisarmedAfterMaxCycles(t *testing.T) {
 	sm.state = StateTriggerLevel2
 	sm.level2Cycles = maxLevel2Cycles
 
-	sm.SendEvent(Level2CheckTimerEvent{})
+	sm.SendEvent(AlarmBurstTimerEvent{Generation: sm.burstGeneration})
 	sm.handleEvent(ctx, <-sm.events)
 
 	if sm.State() != StateDisarmed {
@@ -482,7 +482,7 @@ func TestStateMachine_WaitingMovementToDisarmedAfterMaxCycles(t *testing.T) {
 	ctx := context.Background()
 
 	sm.state = StateWaitingMovement
-	sm.level2Cycles = maxLevel2Cycles - 1
+	sm.level2Cycles = maxLevel2Cycles
 
 	sm.SendEvent(BMXInterruptEvent{})
 	sm.handleEvent(ctx, <-sm.events)
@@ -492,18 +492,18 @@ func TestStateMachine_WaitingMovementToDisarmedAfterMaxCycles(t *testing.T) {
 	}
 }
 
-func TestStateMachine_WaitingMovementToDelayArmed(t *testing.T) {
+func TestStateMachine_WaitingMovementToArmedAfterQuiet(t *testing.T) {
 	sm, _, _, _, _ := createTestStateMachine()
 	ctx := context.Background()
 
 	sm.state = StateWaitingMovement
 	sm.level2Cycles = 2
 
-	sm.SendEvent(Level2CheckTimerEvent{})
+	sm.SendEvent(QuietTimerEvent{Generation: sm.quietGeneration})
 	sm.handleEvent(ctx, <-sm.events)
 
-	if sm.State() != StateDelayArmed {
-		t.Errorf("expected StateDelayArmed, got %s", sm.State())
+	if sm.State() != StateArmed {
+		t.Errorf("expected StateArmed, got %s", sm.State())
 	}
 }
 
@@ -1299,7 +1299,7 @@ func TestStateMachine_L2ExhaustionPreservesWakeFromHibernationInDisarmed(t *test
 	ctx := context.Background()
 
 	sm.state = StateWaitingMovement
-	sm.level2Cycles = maxLevel2Cycles - 1
+	sm.level2Cycles = maxLevel2Cycles
 	sm.alarmEnabled = true
 	sm.vehicleStandby = true
 	sm.wakeFromHibernation = true

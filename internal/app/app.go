@@ -28,6 +28,8 @@ type Config struct {
 	HairTriggerDurationFlagSet bool
 	L1Cooldown                 int
 	L1CooldownFlagSet          bool
+	QuietTime                  int
+	QuietTimeFlagSet           bool
 }
 
 type App struct {
@@ -178,6 +180,15 @@ func (a *App) handleCLIOverrides() error {
 		value := fmt.Sprintf("%d", a.cfg.HairTriggerDuration)
 		if err := settingsPub.Set("alarm.hairtrigger-duration", value); err != nil {
 			return fmt.Errorf("failed to set alarm.hairtrigger-duration: %w", err)
+		}
+	}
+
+	if a.cfg.QuietTimeFlagSet {
+		if a.cfg.QuietTime < 1 || a.cfg.QuietTime > 300 {
+			return fmt.Errorf("quiet-time must be between 1 and 300 seconds")
+		}
+		if err := settingsPub.Set("alarm.quiet-time", fmt.Sprintf("%d", a.cfg.QuietTime)); err != nil {
+			return fmt.Errorf("failed to set alarm.quiet-time: %w", err)
 		}
 	}
 

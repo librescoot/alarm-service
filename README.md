@@ -21,7 +21,13 @@ Part of the [Librescoot](https://librescoot.org/) open-source platform.
 
 The primary status values published as `alarm.status` are `disabled`, `disarmed`, `delay-armed`, `armed`, `level-1-triggered`, `level-2-triggered`, and `seatbox-access`.
 
-When armed, a motion or enabled input trigger enters a configurable level-1 cooldown (two seconds by default). The hazard cue and optional hair-trigger alarm wait 750 milliseconds, allowing an in-progress keycard or phone authentication to disarm the vehicle first; disarming during that grace period cancels the cue. Repeat motion or input triggers during the cooldown do not escalate. After the cooldown, the service starts a five-second level-1 check. A tamper event during that check escalates to level 2; otherwise the service re-arms through the five-second arming delay. An unauthorized seatbox opening escalates directly to level 2. Level 2 runs for 50-second checks and can repeat on further tamper events, up to six cycles. Leaving standby normally disarms the alarm until the scooter is parked again. A runtime disarm remains in effect until the next park cycle, hibernation starts, or eight hours elapse.
+When armed, a motion or enabled input trigger starts an alarm episode. The hazard cue and optional short first-trigger alarm wait 750 milliseconds, allowing an in-progress keycard or phone authentication to disarm the vehicle first; disarming during that grace period cancels the cue.
+
+- `alarm.l1-cooldown`, labelled "L2 Escalation Delay", is the minimum delay before another motion or input trigger can start the full alarm (default two seconds). Earlier triggers reset quiet time but do not escalate. Unauthorized seatbox opening bypasses the delay.
+- `alarm.quiet-time`, labelled "Quiet Time Before Rearming", ends an episode after that many seconds without an accepted trigger (default 30, advanced setting, range 1-300). Each accepted trigger resets the timer throughout L1, a full alarm burst, or the silent wait between bursts. Disabled or suppressed trigger sources do not reset it. Live changes recalculate the deadline from the last disturbance.
+- `alarm.duration`, labelled "Full Alarm Burst Duration", controls each L2 horn/hazard burst (default 30 seconds). Disturbances during a burst reset quiet time without extending the burst. If quiet time has elapsed, the completed burst returns directly to armed; otherwise outputs stay off while waiting for another disturbance or quiet expiry. A new disturbance during this silent wait starts another burst. There is no automatic second burst, fixed 50-second wait, or extra arming delay after quiet expiry.
+
+An episode is capped at six full alarm bursts. If the final burst ends before quiet time has elapsed, the alarm disarms for the existing five-minute safety cooldown and then re-arms. Leaving stand-by normally disarms the alarm until the scooter is parked again. A runtime disarm remains in effect until the next park cycle, hibernation starts, or eight hours elapse.
 
 Handlebar triggers are disabled by default. When enabled, the service ignores the initial field value after startup, suppresses handlebar inputs for 90 seconds after arming, and requires `handlebar:position` to remain `off-place` for one second. These guards do not apply to motion, buttons, or seatbox triggers.
 
@@ -32,7 +38,7 @@ The service connects to `--redis` (default `localhost:6379`). It uses Redis/Valk
 | Interface | Direction | Contract |
 |---|---|---|
 | `vehicle` hash | reads | `state`, `seatbox:lock`, `handlebar:lock-sensor`, and `handlebar:position`; `seatbox:opened` represents an authorized opening. |
-| `settings` hash | reads; CLI overrides write | `alarm.enabled`, `alarm.honk`, `alarm.duration`, `alarm.seatbox-trigger`, `alarm.hairtrigger`, `alarm.hairtrigger-duration`, `alarm.l1-cooldown`, `alarm.trigger.motion`, `alarm.trigger.buttons`, and `alarm.trigger.handlebar`. |
+| `settings` hash | reads; CLI overrides write | `alarm.enabled`, `alarm.honk`, `alarm.duration`, `alarm.seatbox-trigger`, `alarm.hairtrigger`, `alarm.hairtrigger-duration`, `alarm.l1-cooldown`, `alarm.quiet-time`, `alarm.trigger.motion`, `alarm.trigger.buttons`, and `alarm.trigger.handlebar`. |
 | `power-manager` hash | reads | `state` controls hibernation preparation while the alarm is armed. |
 | `usb` hash | reads | `mode` of `ums` or `ums-by-dbc` suppresses the alarm for the duration of the mass-storage session. |
 | `motion:interrupt` | subscribes | JSON object with `type`, millisecond `timestamp`, and optional `engine`; normally published by motion-service. |
@@ -78,10 +84,11 @@ All flags are optional:
 --hair-trigger BOOL
 --hair-trigger-duration SECONDS
 --l1-cooldown SECONDS
+--quiet-time SECONDS
 --version
 ```
 
-Only explicitly supplied setting flags write their associated `settings.alarm.*` field at startup; unset flags do not replace the value already in Redis. `--log-level` and `--redis` are runtime-only. The defaults are alarm enabled, 30-second level-2 alarm duration, horn disabled, seatbox trigger enabled, hair trigger disabled, three-second hair-trigger duration, and two-second level-1 cooldown.
+Only explicitly supplied setting flags write their associated `settings.alarm.*` field at startup; unset flags do not replace the value already in Redis. `--log-level` and `--redis` are runtime-only. The defaults are alarm enabled, 30-second level-2 alarm duration, horn disabled, seatbox trigger enabled, hair trigger disabled, three-second hair-trigger duration, two-second L2 escalation delay, and 30-second quiet time before rearming. Existing saved settings take precedence over defaults. `--l1-cooldown` and the corresponding setting retain their identifiers for compatibility.
 
 ## Build and test
 

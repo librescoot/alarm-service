@@ -96,7 +96,8 @@ func (sm *StateMachine) onExitArmed(_ context.Context) {
 
 func (sm *StateMachine) onEnterTriggerLevel1Wait(ctx context.Context) {
 	sm.log.Info("entering trigger_level_1_wait state",
-		"cooldown", sm.l1CooldownDuration,
+		"escalation_delay_seconds", sm.l1CooldownDuration,
+		"quiet_time_seconds", sm.quietTime,
 		"trigger_delay", level1TriggerDelay)
 
 	if err := sm.inhibitor.Acquire("Level 1 cooldown"); err != nil {
@@ -135,19 +136,12 @@ func (sm *StateMachine) onExitTriggerLevel1Wait(ctx context.Context) {
 }
 
 func (sm *StateMachine) onEnterTriggerLevel1(ctx context.Context) {
-	sm.log.Info("entering trigger_level_1 state", "check_duration", "5s")
-
-	sm.startTimer("level1_check", 5*time.Second, func() {
-		sm.SendEvent(Level1CheckTimerEvent{})
-	})
-}
-
-func (sm *StateMachine) onExitTriggerLevel1(ctx context.Context) {
-	sm.stopTimer("level1_check")
+	sm.log.Info("entering trigger_level_1 state", "quiet_time_seconds", sm.quietTime)
 }
 
 func (sm *StateMachine) onEnterTriggerLevel2(ctx context.Context) {
-	sm.log.Info("entering trigger_level_2 state")
+	sm.level2Cycles++
+	sm.log.Info("entering trigger_level_2 state", "burst", sm.level2Cycles, "duration_seconds", sm.alarmDuration)
 
 	if err := sm.inhibitor.Acquire("Level 2 triggered"); err != nil {
 		sm.log.Error("failed to acquire inhibitor", "error", err)
@@ -157,33 +151,26 @@ func (sm *StateMachine) onEnterTriggerLevel2(ctx context.Context) {
 		sm.log.Error("failed to start alarm", "error", err)
 	}
 
-	sm.startTimer("level2_check", 50*time.Second, func() {
-		sm.SendEvent(Level2CheckTimerEvent{})
+	sm.burstGeneration++
+	generation := sm.burstGeneration
+	sm.startTimer("alarm_burst", time.Duration(sm.alarmDuration)*time.Second, func() {
+		sm.SendEvent(AlarmBurstTimerEvent{Generation: generation})
 	})
 }
 
 func (sm *StateMachine) onExitTriggerLevel2(ctx context.Context) {
-	sm.stopTimer("level2_check")
+	sm.stopTimer("alarm_burst")
+	sm.burstGeneration++
 	if err := sm.alarmController.Stop(); err != nil {
 		sm.log.Error("failed to stop alarm", "error", err)
 	}
 }
 
 func (sm *StateMachine) onEnterWaitingMovement(ctx context.Context) {
-	sm.log.Info("entering waiting_movement state", "duration", "50s", "cycle", sm.level2Cycles)
-
-	if err := sm.alarmController.Start(time.Duration(sm.alarmDuration) * time.Second); err != nil {
-		sm.log.Error("failed to start alarm", "error", err)
-	}
-
-	sm.startTimer("waiting_movement", 50*time.Second, func() {
-		sm.SendEvent(Level2CheckTimerEvent{})
-	})
+	sm.log.Info("waiting quietly for another disturbance", "quiet_time_seconds", sm.quietTime, "bursts", sm.level2Cycles)
 }
 
 func (sm *StateMachine) onExitWaitingMovement(ctx context.Context) {
-	sm.stopTimer("chip_setup")
-	sm.stopTimer("waiting_movement")
 	if err := sm.alarmController.Stop(); err != nil {
 		sm.log.Error("failed to stop alarm", "error", err)
 	}

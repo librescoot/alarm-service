@@ -44,6 +44,12 @@ type L1CooldownDurationChangedEvent struct {
 
 func (e L1CooldownDurationChangedEvent) Type() string { return "l1_cooldown_duration_changed" }
 
+type QuietTimeChangedEvent struct {
+	Duration int
+}
+
+func (e QuietTimeChangedEvent) Type() string { return "quiet_time_changed" }
+
 type VehicleStateChangedEvent struct {
 	State VehicleState
 }
@@ -138,13 +144,17 @@ type Level1CooldownTimerEvent struct{}
 
 func (e Level1CooldownTimerEvent) Type() string { return "level1_cooldown_timer" }
 
-type Level1CheckTimerEvent struct{}
+type QuietTimerEvent struct {
+	Generation uint64
+}
 
-func (e Level1CheckTimerEvent) Type() string { return "level1_check_timer" }
+func (e QuietTimerEvent) Type() string { return "quiet_timer" }
 
-type Level2CheckTimerEvent struct{}
+type AlarmBurstTimerEvent struct {
+	Generation uint64
+}
 
-func (e Level2CheckTimerEvent) Type() string { return "level2_check_timer" }
+func (e AlarmBurstTimerEvent) Type() string { return "alarm_burst_timer" }
 
 type HandlebarSettleTimerEvent struct{}
 
