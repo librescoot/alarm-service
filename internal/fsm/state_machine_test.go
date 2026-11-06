@@ -250,6 +250,36 @@ func TestStateMachine_ArmedToTriggerLevel1Wait(t *testing.T) {
 	}
 }
 
+func TestStateMachine_TwoSecondCooldownThenRepeatMotionEscalates(t *testing.T) {
+	sm, _, _, _, alarm := createTestStateMachine()
+	defer sm.cleanupTimers()
+	ctx := context.Background()
+	sm.state = StateArmed
+	sm.alarmEnabled = true
+	sm.vehicleStandby = true
+	if sm.l1CooldownDuration != 2 {
+		t.Fatalf("default cooldown = %d, want 2 seconds", sm.l1CooldownDuration)
+	}
+
+	sm.handleEvent(ctx, BMXInterruptEvent{})
+	sm.handleEvent(ctx, Level1TriggerDelayTimerEvent{})
+	if alarm.blinkCalled != 1 || alarm.active {
+		t.Fatal("expected a warning blink without the full alarm")
+	}
+	sm.handleEvent(ctx, BMXInterruptEvent{})
+	if sm.State() != StateTriggerLevel1Wait {
+		t.Fatal("repeat motion during cooldown must not escalate")
+	}
+	sm.handleEvent(ctx, Level1CooldownTimerEvent{})
+	if sm.State() != StateTriggerLevel1 {
+		t.Fatal("cooldown expiry must open the five-second check")
+	}
+	sm.handleEvent(ctx, BMXInterruptEvent{})
+	if sm.State() != StateTriggerLevel2 || !alarm.active {
+		t.Fatal("repeat motion during the check must start the full alarm")
+	}
+}
+
 func TestStateMachine_Level1CueStaysCancelledAfterUnlock(t *testing.T) {
 	sm, _, _, _, alarm := createTestStateMachine()
 	ctx := context.Background()

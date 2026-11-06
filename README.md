@@ -21,7 +21,7 @@ Part of the [Librescoot](https://librescoot.org/) open-source platform.
 
 The primary status values published as `alarm.status` are `disabled`, `disarmed`, `delay-armed`, `armed`, `level-1-triggered`, `level-2-triggered`, and `seatbox-access`.
 
-When armed, a motion or enabled input trigger enters a configurable level-1 cooldown (15 seconds by default). The hazard cue and optional hair-trigger alarm wait 750 milliseconds, allowing an in-progress keycard or phone authentication to disarm the vehicle first; disarming during that grace period cancels the cue. After the cooldown, the service starts a five-second level-1 check. A subsequent tamper event escalates to level 2. An unauthorized seatbox opening escalates directly to level 2. Level 2 runs for 50-second checks and can repeat on further tamper events, up to six cycles. Leaving standby normally disarms the alarm until the scooter is parked again. A runtime disarm remains in effect until the next park cycle, hibernation starts, or eight hours elapse.
+When armed, a motion or enabled input trigger enters a configurable level-1 cooldown (two seconds by default). The hazard cue and optional hair-trigger alarm wait 750 milliseconds, allowing an in-progress keycard or phone authentication to disarm the vehicle first; disarming during that grace period cancels the cue. Repeat motion or input triggers during the cooldown do not escalate. After the cooldown, the service starts a five-second level-1 check. A tamper event during that check escalates to level 2; otherwise the service re-arms through the five-second arming delay. An unauthorized seatbox opening escalates directly to level 2. Level 2 runs for 50-second checks and can repeat on further tamper events, up to six cycles. Leaving standby normally disarms the alarm until the scooter is parked again. A runtime disarm remains in effect until the next park cycle, hibernation starts, or eight hours elapse.
 
 Handlebar triggers are disabled by default. When enabled, the service ignores the initial field value after startup, suppresses handlebar inputs for 90 seconds after arming, and requires `handlebar:position` to remain `off-place` for one second. These guards do not apply to motion, buttons, or seatbox triggers.
 
@@ -81,7 +81,7 @@ All flags are optional:
 --version
 ```
 
-Only explicitly supplied setting flags write their associated `settings.alarm.*` field at startup; unset flags do not replace the value already in Redis. `--log-level` and `--redis` are runtime-only. The defaults are alarm enabled, 30-second level-2 alarm duration, horn disabled, seatbox trigger enabled, hair trigger disabled, three-second hair-trigger duration, and 15-second level-1 cooldown.
+Only explicitly supplied setting flags write their associated `settings.alarm.*` field at startup; unset flags do not replace the value already in Redis. `--log-level` and `--redis` are runtime-only. The defaults are alarm enabled, 30-second level-2 alarm duration, horn disabled, seatbox trigger enabled, hair trigger disabled, three-second hair-trigger duration, and two-second level-1 cooldown.
 
 ## Build and test
 
