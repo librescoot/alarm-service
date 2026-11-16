@@ -93,9 +93,11 @@ func isHibernatingImminentState(state string) bool {
 	case "hibernating-imminent",
 		"hibernating-manual-imminent",
 		"hibernating-timer-imminent",
+		"hibernating-for-imminent",
 		"hibernating",
 		"hibernating-manual",
-		"hibernating-timer":
+		"hibernating-timer",
+		"hibernating-for":
 		return true
 	}
 	return false
