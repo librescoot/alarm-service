@@ -75,7 +75,7 @@ type StateMachine struct {
 	state  State
 	events chan Event
 	log    *slog.Logger
-	ctx    context.Context
+	done   chan struct{}
 
 	motion          MotionRPC
 	publisher       StatusPublisher
@@ -84,6 +84,7 @@ type StateMachine struct {
 	powerCommander  PowerCommander
 
 	timers              map[string]*time.Timer
+	timerGeneration     map[string]uint64
 	alarmEnabled        bool
 	vehicleStandby      bool
 	lastVehicleState    VehicleState
@@ -153,6 +154,7 @@ func New(
 	return &StateMachine{
 		state:               StateInit,
 		events:              make(chan Event, 100),
+		done:                make(chan struct{}),
 		log:                 log,
 		motion:              motion,
 		publisher:           pub,
@@ -160,6 +162,7 @@ func New(
 		alarmController:     alarm,
 		powerCommander:      power,
 		timers:              make(map[string]*time.Timer),
+		timerGeneration:     make(map[string]uint64),
 		alarmEnabled:        false,
 		vehicleStandby:      false,
 		level2Cycles:        0,
@@ -201,7 +204,7 @@ func triggerSourceOf(e Event) (string, bool) {
 
 func (sm *StateMachine) Run(ctx context.Context) {
 	sm.log.Info("starting state machine")
-	sm.ctx = ctx
+	defer close(sm.done)
 
 	for {
 		select {
@@ -219,8 +222,7 @@ func (sm *StateMachine) Run(ctx context.Context) {
 func (sm *StateMachine) SendEvent(event Event) {
 	select {
 	case sm.events <- event:
-	default:
-		sm.log.Warn("event queue full, dropping event", "type", event.Type())
+	case <-sm.done:
 	}
 }
 
@@ -240,6 +242,13 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
+	if expiry, ok := event.(timerExpiry); ok {
+		if sm.timerGeneration[expiry.name] != expiry.generation {
+			return
+		}
+		event = expiry.event
+	}
+
 	// Track the raw vehicle state so onEnterDisarmed can tell a transient
 	// non-stand-by state (waiting-seatbox) from the rider actually using the
 	// scooter. Only the latter cancels a pending post-wake re-hibernate.
@@ -254,9 +263,7 @@ func (sm *StateMachine) handleEvent(ctx context.Context, event Event) {
 		sm.runtimeDisarmed = true
 		sm.runtimeDisarmSawInUse = vehicleInUse(sm.lastVehicleState)
 		sm.stopTimer("post_alarm_cooldown")
-		sm.startTimer("runtime_disarm", runtimeDisarmDuration, func() {
-			sm.SendEvent(RuntimeDisarmTimerEvent{})
-		})
+		sm.startTimer("runtime_disarm", runtimeDisarmDuration, RuntimeDisarmTimerEvent{})
 		sm.log.Info("runtime disarm started", "duration", runtimeDisarmDuration)
 	}
 
@@ -553,18 +560,22 @@ func (sm *StateMachine) scheduleQuietTimer() {
 	generation := sm.quietGeneration
 	delay := time.Until(sm.lastDisturbance.Add(time.Duration(sm.quietTime) * time.Second))
 	// A queued expiry from before a disturbance must not end the renewed episode.
-	sm.startTimer("quiet", delay, func() {
-		sm.SendEvent(QuietTimerEvent{Generation: generation})
-	})
+	sm.startTimer("quiet", delay, QuietTimerEvent{Generation: generation})
 }
 
-func (sm *StateMachine) startTimer(name string, duration time.Duration, callback func()) {
-	sm.stopTimer(name)
+type timerExpiry struct {
+	name       string
+	generation uint64
+	event      Event
+}
 
+func (e timerExpiry) Type() string { return e.event.Type() }
+
+func (sm *StateMachine) startTimer(name string, duration time.Duration, event Event) {
+	sm.stopTimer(name)
+	generation := sm.timerGeneration[name]
 	timer := time.AfterFunc(duration, func() {
-		if callback != nil {
-			callback()
-		}
+		sm.SendEvent(timerExpiry{name: name, generation: generation, event: event})
 	})
 
 	sm.timers[name] = timer
@@ -572,6 +583,7 @@ func (sm *StateMachine) startTimer(name string, duration time.Duration, callback
 }
 
 func (sm *StateMachine) stopTimer(name string) {
+	sm.timerGeneration[name]++
 	if timer, ok := sm.timers[name]; ok {
 		timer.Stop()
 		delete(sm.timers, name)

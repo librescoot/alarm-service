@@ -29,9 +29,7 @@ func (sm *StateMachine) onEnterDisarmed(ctx context.Context) {
 	// cannot simply wait out the alarm.
 	if sm.vehicleStandby && sm.alarmEnabled && !sm.umsActive && !sm.runtimeDisarmed {
 		sm.log.Info("post-alarm cooldown started", "duration", "5m", "wake_from_hibernation", sm.wakeFromHibernation)
-		sm.startTimer("post_alarm_cooldown", 5*time.Minute, func() {
-			sm.SendEvent(PostAlarmCooldownTimerEvent{})
-		})
+		sm.startTimer("post_alarm_cooldown", 5*time.Minute, PostAlarmCooldownTimerEvent{})
 	} else if vehicleInUse(sm.lastVehicleState) {
 		// The rider is here; the wake-from-hibernation intent is spent. A
 		// transient non-stand-by state (e.g. waiting-seatbox after a forced
@@ -51,9 +49,7 @@ func (sm *StateMachine) onEnterDelayArmed(ctx context.Context) {
 		sm.log.Error("failed to acquire inhibitor", "error", err)
 	}
 
-	sm.startTimer("delay_armed", 5*time.Second, func() {
-		sm.SendEvent(DelayArmedTimerEvent{})
-	})
+	sm.startTimer("delay_armed", 5*time.Second, DelayArmedTimerEvent{})
 
 	sm.level2Cycles = 0
 	sm.requestDisarm = false
@@ -72,9 +68,7 @@ func (sm *StateMachine) onEnterArmed(ctx context.Context) {
 
 	// Each arm starts a fresh window because the lock actuator runs again.
 	sm.handlebarSettled = false
-	sm.startTimer("handlebar_settle", handlebarSettleDelay, func() {
-		sm.SendEvent(HandlebarSettleTimerEvent{})
-	})
+	sm.startTimer("handlebar_settle", handlebarSettleDelay, HandlebarSettleTimerEvent{})
 
 	// A pre-existing imminent signal still requires the synchronous handshake.
 	if sm.hibernationImminent {
@@ -84,9 +78,7 @@ func (sm *StateMachine) onEnterArmed(ctx context.Context) {
 	// A wake edge is not immediate tampering; re-hibernate only after quiet.
 	if sm.wakeFromHibernation && sm.vehicleStandby {
 		sm.log.Info("armed after hibernation wake, starting re-hibernate cooldown", "duration", "5m")
-		sm.startTimer("hibernate_cooldown", 5*time.Minute, func() {
-			sm.SendEvent(HibernateAfterWakeTimerEvent{})
-		})
+		sm.startTimer("hibernate_cooldown", 5*time.Minute, HibernateAfterWakeTimerEvent{})
 	}
 }
 
@@ -104,12 +96,8 @@ func (sm *StateMachine) onEnterTriggerLevel1Wait(ctx context.Context) {
 		sm.log.Error("failed to acquire inhibitor", "error", err)
 	}
 
-	sm.startTimer("level1_trigger_delay", level1TriggerDelay, func() {
-		sm.SendEvent(Level1TriggerDelayTimerEvent{})
-	})
-	sm.startTimer("level1_cooldown", time.Duration(sm.l1CooldownDuration)*time.Second, func() {
-		sm.SendEvent(Level1CooldownTimerEvent{})
-	})
+	sm.startTimer("level1_trigger_delay", level1TriggerDelay, Level1TriggerDelayTimerEvent{})
+	sm.startTimer("level1_cooldown", time.Duration(sm.l1CooldownDuration)*time.Second, Level1CooldownTimerEvent{})
 }
 
 func (sm *StateMachine) triggerLevel1Cue() {
@@ -153,9 +141,7 @@ func (sm *StateMachine) onEnterTriggerLevel2(ctx context.Context) {
 
 	sm.burstGeneration++
 	generation := sm.burstGeneration
-	sm.startTimer("alarm_burst", time.Duration(sm.alarmDuration)*time.Second, func() {
-		sm.SendEvent(AlarmBurstTimerEvent{Generation: generation})
-	})
+	sm.startTimer("alarm_burst", time.Duration(sm.alarmDuration)*time.Second, AlarmBurstTimerEvent{Generation: generation})
 }
 
 func (sm *StateMachine) onExitTriggerLevel2(ctx context.Context) {

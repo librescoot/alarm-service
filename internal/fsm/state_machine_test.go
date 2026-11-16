@@ -650,18 +650,6 @@ func TestStateMachine_StateToStatus(t *testing.T) {
 	}
 }
 
-func TestStateMachine_EventQueueFull(t *testing.T) {
-	sm, _, _, _, _ := createTestStateMachine()
-
-	for i := 0; i < 150; i++ {
-		sm.SendEvent(InitCompleteEvent{})
-	}
-
-	if len(sm.events) > 100 {
-		t.Error("expected event queue to drop events when full")
-	}
-}
-
 func TestStateMachine_AlarmStopsOnLevel2Exit(t *testing.T) {
 	sm, _, _, _, alarm := createTestStateMachine()
 	ctx := context.Background()

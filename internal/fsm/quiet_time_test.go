@@ -39,7 +39,7 @@ func TestShorteningQuietTimeUsesLastDisturbance(t *testing.T) {
 	sm.handleEvent(context.Background(), QuietTimeChangedEvent{Duration: 1})
 	select {
 	case event := <-sm.events:
-		if _, ok := event.(QuietTimerEvent); !ok {
+		if _, ok := event.(timerExpiry); !ok || event.Type() != "quiet_timer" {
 			t.Fatalf("expected quiet expiry, got %T", event)
 		}
 		sm.handleEvent(context.Background(), event)
