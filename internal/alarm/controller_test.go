@@ -15,9 +15,12 @@ func setupTestController(t *testing.T, hornEnabled bool) (*Controller, *ipc.Clie
 		Level: slog.LevelError,
 	}))
 
+	addr := os.Getenv("ALARM_TEST_REDIS_URL")
+	if addr == "" {
+		addr = "redis://localhost:6379"
+	}
 	client, err := ipc.New(
-		ipc.WithAddress("localhost"),
-		ipc.WithPort(6379),
+		ipc.WithURL(addr),
 		ipc.WithCodec(ipc.StringCodec{}),
 	)
 	if err != nil {
@@ -70,6 +73,8 @@ func TestController_HornPattern(t *testing.T) {
 
 	time.Sleep(1500 * time.Millisecond)
 
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.active {
 		t.Error("expected alarm to be inactive after duration expired")
 	}
@@ -85,6 +90,8 @@ func TestController_HornDisabled(t *testing.T) {
 
 	time.Sleep(1200 * time.Millisecond)
 
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.active {
 		t.Error("expected alarm to be inactive after stop")
 	}
@@ -109,6 +116,40 @@ func TestController_HandleCommandStopNotifiesStateMachine(t *testing.T) {
 
 	if !commander.stopped {
 		t.Error("expected stop command to notify the state machine")
+	}
+}
+
+func TestController_StopWaitsForHornPattern(t *testing.T) {
+	c, client := setupTestController(t, true)
+	defer client.Close()
+
+	c.hornMu.Lock()
+	if err := c.Start(5 * time.Second); err != nil {
+		c.hornMu.Unlock()
+		t.Fatal(err)
+	}
+	// Hold a horn write across cancellation to exercise the final-write ordering.
+	time.Sleep(500 * time.Millisecond)
+	stopped := make(chan struct{})
+	go func() {
+		_ = c.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		c.hornMu.Unlock()
+		t.Fatal("Stop returned before the horn pattern finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+	c.hornMu.Unlock()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not finish")
+	}
+	last, err := client.LPop("scooter:horn")
+	if err != nil || last != "off" {
+		t.Fatalf("last horn command = %q, error = %v; want off", last, err)
 	}
 }
 

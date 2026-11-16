@@ -25,9 +25,11 @@ type Controller struct {
 	commander   RuntimeCommander
 	ctx         context.Context
 	cancel      context.CancelFunc
+	hornDone    chan struct{}
 	log         *slog.Logger
 	mu          sync.Mutex
 	active      bool
+	hornMu      sync.Mutex
 	hornEnabled atomic.Bool
 
 	// Exactly one hazard pattern may write at once; cancellation waits so the
@@ -81,6 +83,8 @@ func (c *Controller) SetCommander(commander RuntimeCommander) {
 }
 
 func (c *Controller) SetHornEnabled(enabled bool) {
+	c.hornMu.Lock()
+	defer c.hornMu.Unlock()
 	c.hornEnabled.Store(enabled)
 	c.log.Info("horn setting updated", "enabled", enabled)
 	if !enabled {
@@ -118,7 +122,21 @@ func (c *Controller) Start(duration time.Duration) error {
 		c.log.Error("failed to publish alarm-active", "error", err)
 	}
 
-	go c.runHornPattern(ctx, duration)
+	done := make(chan struct{})
+	c.hornDone = done
+	go func() {
+		expired := c.runHornPattern(ctx, duration)
+		close(done)
+		if expired {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			if c.hornDone == done {
+				if err := c.stopUnsafe(); err != nil {
+					c.log.Error("failed to stop alarm after duration expired", "error", err)
+				}
+			}
+		}
+	}()
 
 	return nil
 }
@@ -141,6 +159,10 @@ func (c *Controller) stopUnsafe() error {
 
 	if c.cancel != nil {
 		c.cancel()
+	}
+	if c.hornDone != nil {
+		<-c.hornDone
+		c.hornDone = nil
 	}
 
 	if _, err := c.ipc.LPush("scooter:horn", "off"); err != nil {
@@ -171,7 +193,7 @@ func (c *Controller) cancelBlinkerLocked() {
 	<-done
 }
 
-func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration) {
+func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration) bool {
 	const cycleDuration = 800 * time.Millisecond
 	const buffer = 200 * time.Millisecond
 	cycles := int((duration - buffer) / cycleDuration)
@@ -192,9 +214,10 @@ func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration)
 		select {
 		case <-ctx.Done():
 			c.log.Info("horn pattern cancelled")
-			return
+			return false
 
 		case <-ticker.C:
+			c.hornMu.Lock()
 			if c.hornEnabled.Load() {
 				if ticks%2 == 0 {
 					_, _ = c.ipc.LPush("scooter:horn", "on")
@@ -202,13 +225,11 @@ func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration)
 					_, _ = c.ipc.LPush("scooter:horn", "off")
 				}
 			}
+			c.hornMu.Unlock()
 			ticks++
 			if ticks >= totalTicks {
 				c.log.Info("alarm duration expired", "cycles", cycles)
-				if err := c.Stop(); err != nil {
-					c.log.Error("failed to stop alarm after duration expired", "error", err)
-				}
-				return
+				return true
 			}
 		}
 	}
