@@ -49,6 +49,7 @@ func setupTestController(t *testing.T, hornEnabled bool) (*Controller, *ipc.Clie
 func TestController_BlinkHazards(t *testing.T) {
 	c, client := setupTestController(t, false)
 	defer client.Close()
+	defer c.Stop()
 
 	start := time.Now()
 	err := c.BlinkHazards()
@@ -60,6 +61,34 @@ func TestController_BlinkHazards(t *testing.T) {
 
 	if duration > 100*time.Millisecond {
 		t.Errorf("BlinkHazards should return quickly (async), took %v", duration)
+	}
+}
+
+func TestController_StopCancelsHazardCue(t *testing.T) {
+	c, client := setupTestController(t, false)
+	defer client.Close()
+	defer c.Stop()
+
+	if err := c.BlinkHazards(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		last, err := client.Raw().LIndex(context.Background(), "scooter:blinker", 0).Result()
+		if err == nil && last == "both" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("hazard cue did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := c.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	last, err := client.Raw().LIndex(context.Background(), "scooter:blinker", 0).Result()
+	if err != nil || last != "off" {
+		t.Fatalf("last blinker command = %q, error = %v; want off", last, err)
 	}
 }
 

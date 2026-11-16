@@ -148,10 +148,14 @@ func (c *Controller) Stop() error {
 }
 
 func (c *Controller) stopUnsafe() error {
-
-	c.cancelBlinkerLocked()
+	cueInterrupted := c.cancelBlinkerLocked()
 
 	if !c.active {
+		if cueInterrupted {
+			if _, err := c.ipc.LPush("scooter:blinker", "off"); err != nil {
+				c.log.Error("failed to turn off blinker", "error", err)
+			}
+		}
 		return nil
 	}
 
@@ -182,15 +186,22 @@ func (c *Controller) stopUnsafe() error {
 
 // cancelBlinkerLocked waits while holding mu; the pattern does not need mu,
 // preserving a coherent cancellation state for concurrent callers.
-func (c *Controller) cancelBlinkerLocked() {
+func (c *Controller) cancelBlinkerLocked() bool {
 	if c.blinkerCancel == nil {
-		return
+		return false
+	}
+	done := c.blinkerDone
+	interrupted := true
+	select {
+	case <-done:
+		interrupted = false
+	default:
 	}
 	c.blinkerCancel()
-	done := c.blinkerDone
 	c.blinkerCancel = nil
 	c.blinkerDone = nil
 	<-done
+	return interrupted
 }
 
 func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration) bool {
