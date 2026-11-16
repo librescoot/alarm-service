@@ -534,16 +534,18 @@ func (sm *StateMachine) stateToStatus(state State) string {
 // confirmHibernationProfile synchronously gates suspend on the stricter motion
 // profile; reactive profile updates are insufficient once power is removed.
 func (sm *StateMachine) confirmHibernationProfile(ctx context.Context) {
+	if err := sm.inhibitor.Acquire("Preparing motion for hibernation"); err != nil {
+		sm.log.Error("failed to acquire suspend inhibitor", "error", err)
+	}
 	sm.log.Info("requesting motion-service prepare-hibernation")
 	if err := sm.motion.PrepareHibernation(ctx); err != nil {
-		// Keep suspend blocked when the chip profile cannot be verified.
 		sm.log.Error("prepare-hibernation failed; holding pm-inhibitor to block suspend", "error", err)
-		if err := sm.inhibitor.Acquire("Motion-service prepare-hibernation failed"); err != nil {
-			sm.log.Error("failed to acquire suspend inhibitor", "error", err)
-		}
 		return
 	}
 	sm.log.Info("motion-service confirmed armed-hibernation profile")
+	if err := sm.inhibitor.Release(); err != nil {
+		sm.log.Error("failed to release inhibitor", "error", err)
+	}
 }
 
 func alarmEpisodeState(state State) bool {

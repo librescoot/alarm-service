@@ -62,18 +62,15 @@ func (sm *StateMachine) onExitDelayArmed(ctx context.Context) {
 func (sm *StateMachine) onEnterArmed(ctx context.Context) {
 	sm.log.Info("entering armed state", "hibernation_imminent", sm.hibernationImminent)
 
-	if err := sm.inhibitor.Release(); err != nil {
+	if sm.hibernationImminent {
+		sm.confirmHibernationProfile(ctx)
+	} else if err := sm.inhibitor.Release(); err != nil {
 		sm.log.Error("failed to release inhibitor", "error", err)
 	}
 
 	// Each arm starts a fresh window because the lock actuator runs again.
 	sm.handlebarSettled = false
 	sm.startTimer("handlebar_settle", handlebarSettleDelay, HandlebarSettleTimerEvent{})
-
-	// A pre-existing imminent signal still requires the synchronous handshake.
-	if sm.hibernationImminent {
-		sm.confirmHibernationProfile(ctx)
-	}
 
 	// A wake edge is not immediate tampering; re-hibernate only after quiet.
 	if sm.wakeFromHibernation && sm.vehicleStandby {

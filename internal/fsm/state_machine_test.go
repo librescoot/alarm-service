@@ -2,6 +2,8 @@ package fsm
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -11,10 +13,14 @@ import (
 type mockMotionRPC struct {
 	prepareCalls int
 	prepareErr   error
+	onPrepare    func()
 }
 
 func (m *mockMotionRPC) PrepareHibernation(ctx context.Context) error {
 	m.prepareCalls++
+	if m.onPrepare != nil {
+		m.onPrepare()
+	}
 	return m.prepareErr
 }
 
@@ -107,6 +113,29 @@ func createTestStateMachineWithPower() (*StateMachine, *mockMotionRPC, *mockStat
 
 	sm := New(motion, pub, inh, alarm, power, 10, log)
 	return sm, motion, pub, inh, alarm, power
+}
+
+func TestHibernationHandshakeHoldsInhibitor(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			sm, motion, _, inhibitor, _ := createTestStateMachine()
+			defer sm.cleanupTimers()
+			sm.hibernationImminent = true
+			inhibitor.acquired = true
+			motion.onPrepare = func() {
+				if !inhibitor.acquired {
+					t.Error("hibernation was unblocked before motion preparation")
+				}
+			}
+			if fail {
+				motion.prepareErr = errors.New("motion unavailable")
+			}
+			sm.onEnterArmed(context.Background())
+			if inhibitor.acquired != fail {
+				t.Errorf("inhibitor acquired = %v after preparation failure = %v", inhibitor.acquired, fail)
+			}
+		})
+	}
 }
 
 func TestStateMachine_InitialState(t *testing.T) {
