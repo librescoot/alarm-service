@@ -142,6 +142,35 @@ func TestController_RetriesFailedStop(t *testing.T) {
 	}
 }
 
+func TestController_RetriesFailedCompletedWarningOff(t *testing.T) {
+	c, client := setupTestController(t, false)
+	defer c.Close()
+	var offCalls atomic.Int32
+	c.pushOutput = func(queue, value string) error {
+		if queue == "scooter:blinker" && value == "off" && offCalls.Add(1) == 3 {
+			return errors.New("redis unavailable")
+		}
+		_, err := client.LPush(queue, value)
+		return err
+	}
+	if err := c.BlinkHazards(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for offCalls.Load() < 4 {
+		if time.Now().After(deadline) {
+			t.Fatal("failed final warning off was not retried")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	c.mu.Lock()
+	c.mu.Unlock()
+	last, err := client.Raw().LIndex(context.Background(), "scooter:blinker", 0).Result()
+	if err != nil || last != "off" {
+		t.Fatalf("last blinker command = %q, error = %v; want off", last, err)
+	}
+}
+
 func TestController_HornPattern(t *testing.T) {
 	c, client := setupTestController(t, true)
 	defer client.Close()

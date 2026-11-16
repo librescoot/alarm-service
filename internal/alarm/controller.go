@@ -45,6 +45,11 @@ type Controller struct {
 	// next command is final-write-wins rather than visible flicker.
 	blinkerCancel context.CancelFunc
 	blinkerDone   chan struct{}
+	blinkerResult *blinkerResult
+}
+
+type blinkerResult struct {
+	offFailed bool
 }
 
 func NewController(redisAddr string, hornEnabled bool, log *slog.Logger) (*Controller, error) {
@@ -262,6 +267,7 @@ func (c *Controller) cancelBlinkerLocked() bool {
 		return false
 	}
 	done := c.blinkerDone
+	result := c.blinkerResult
 	interrupted := true
 	select {
 	case <-done:
@@ -271,8 +277,9 @@ func (c *Controller) cancelBlinkerLocked() bool {
 	c.blinkerCancel()
 	c.blinkerCancel = nil
 	c.blinkerDone = nil
+	c.blinkerResult = nil
 	<-done
-	return interrupted
+	return interrupted || result.offFailed
 }
 
 func (c *Controller) runHornPattern(ctx context.Context, duration time.Duration) bool {
@@ -339,11 +346,25 @@ func (c *Controller) BlinkHazards() error {
 
 	ctx, cancel := context.WithCancel(c.ctx)
 	done := make(chan struct{})
+	result := &blinkerResult{}
 	c.blinkerCancel = cancel
 	c.blinkerDone = done
+	c.blinkerResult = result
 
 	go func() {
-		defer close(done)
+		defer func() {
+			close(done)
+			if result.offFailed {
+				c.mu.Lock()
+				defer c.mu.Unlock()
+				if c.blinkerDone == done {
+					c.pendingBlinkerOff = true
+					if err := c.flushStopLocked(); err != nil {
+						c.log.Error("failed to turn off blinker", "error", err)
+					}
+				}
+			}
+		}()
 
 		wait := func(d time.Duration) bool {
 			select {
@@ -353,10 +374,12 @@ func (c *Controller) BlinkHazards() error {
 				return false
 			}
 		}
-		push := func(value string) {
-			if _, err := c.ipc.LPush("scooter:blinker", value); err != nil {
+		push := func(value string) error {
+			if err := c.pushOutput("scooter:blinker", value); err != nil {
 				c.log.Error("blink hazards LPush failed", "value", value, "error", err)
+				return err
 			}
+			return nil
 		}
 
 		push("both")
@@ -373,7 +396,7 @@ func (c *Controller) BlinkHazards() error {
 		if !wait(600 * time.Millisecond) {
 			return
 		}
-		push("off")
+		result.offFailed = push("off") != nil
 	}()
 
 	c.mu.Unlock()
