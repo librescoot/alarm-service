@@ -221,7 +221,7 @@ func (c *Controller) flushStopLocked() error {
 			c.pendingBlinkerOff = false
 		}
 	}
-	if c.pendingInactive {
+	if c.pendingInactive && !c.pendingHornOff && !c.pendingBlinkerOff {
 		if err := c.alarmPub.Set("alarm-active", "false"); err != nil {
 			result = errors.Join(result, fmt.Errorf("publish alarm inactive: %w", err))
 		} else {

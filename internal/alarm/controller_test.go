@@ -142,6 +142,35 @@ func TestController_RetriesFailedStop(t *testing.T) {
 	}
 }
 
+func TestController_PendingStopCannotOvertakeNewAlarm(t *testing.T) {
+	c, client := setupTestController(t, true)
+	defer c.Close()
+	if err := c.Start(10 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	var fail atomic.Bool
+	fail.Store(true)
+	c.pushOutput = func(queue, value string) error {
+		if fail.Load() {
+			return errors.New("redis unavailable")
+		}
+		_, err := client.LPush(queue, value)
+		return err
+	}
+	if err := c.Stop(); err == nil {
+		t.Fatal("expected stop failure")
+	}
+	fail.Store(false)
+	if err := c.Start(5 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	last, err := client.Raw().LIndex(context.Background(), "scooter:blinker", 0).Result()
+	if err != nil || last != "both" {
+		t.Fatalf("new alarm blinker command = %q, error = %v; want both", last, err)
+	}
+}
+
 func TestController_RetriesFailedCompletedWarningOff(t *testing.T) {
 	c, client := setupTestController(t, false)
 	defer c.Close()
