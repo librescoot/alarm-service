@@ -539,7 +539,10 @@ func (sm *StateMachine) confirmHibernationProfile(ctx context.Context) {
 	}
 	sm.log.Info("requesting motion-service prepare-hibernation")
 	if err := sm.motion.PrepareHibernation(ctx); err != nil {
-		sm.log.Error("prepare-hibernation failed; holding pm-inhibitor to block suspend", "error", err)
+		sm.log.Error("prepare-hibernation failed", "error", err)
+		if err := sm.inhibitor.Acquire("Motion-service prepare-hibernation failed"); err != nil {
+			sm.log.Error("failed to hold suspend inhibitor after motion preparation failure", "error", err)
+		}
 		return
 	}
 	sm.log.Info("motion-service confirmed armed-hibernation profile")
