@@ -2,6 +2,7 @@ package alarm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -32,6 +33,14 @@ type Controller struct {
 	hornMu      sync.Mutex
 	hornEnabled atomic.Bool
 
+	pendingHornOff    bool
+	pendingBlinkerOff bool
+	pendingInactive   bool
+	retrying          bool
+	closed            bool
+	retryStop         chan struct{}
+	pushOutput        func(string, string) error
+
 	// Exactly one hazard pattern may write at once; cancellation waits so the
 	// next command is final-write-wins rather than visible flicker.
 	blinkerCancel context.CancelFunc
@@ -56,6 +65,11 @@ func NewController(redisAddr string, hornEnabled bool, log *slog.Logger) (*Contr
 		ctx:         ctx,
 		log:         log,
 		active:      false,
+		retryStop:   make(chan struct{}),
+	}
+	c.pushOutput = func(queue, value string) error {
+		_, err := c.ipc.LPush(queue, value)
+		return err
 	}
 	c.hornEnabled.Store(hornEnabled)
 
@@ -75,6 +89,12 @@ func (c *Controller) Close() error {
 	if c.cmdHandler != nil {
 		c.cmdHandler.Stop()
 	}
+	c.mu.Lock()
+	c.closed = true
+	if c.retryStop != nil {
+		close(c.retryStop)
+	}
+	c.mu.Unlock()
 	return c.ipc.Close()
 }
 
@@ -83,15 +103,19 @@ func (c *Controller) SetCommander(commander RuntimeCommander) {
 }
 
 func (c *Controller) SetHornEnabled(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.hornMu.Lock()
 	defer c.hornMu.Unlock()
 	c.hornEnabled.Store(enabled)
 	c.log.Info("horn setting updated", "enabled", enabled)
 	if !enabled {
-		// Silence an energized horn immediately; its pattern stops issuing offs.
-		if _, err := c.ipc.LPush("scooter:horn", "off"); err != nil {
+		c.pendingHornOff = true
+		if err := c.flushStopLocked(); err != nil {
 			c.log.Error("failed to silence horn", "error", err)
 		}
+	} else {
+		c.pendingHornOff = false
 	}
 }
 
@@ -103,6 +127,12 @@ func (c *Controller) Start(duration time.Duration) error {
 		c.log.Warn("alarm already active, stopping previous alarm")
 		if err := c.stopUnsafe(); err != nil {
 			c.log.Error("failed to stop previous alarm", "error", err)
+		}
+	}
+
+	if c.pendingHornOff || c.pendingBlinkerOff || c.pendingInactive {
+		if err := c.flushStopLocked(); err != nil {
+			return fmt.Errorf("previous alarm has not stopped: %w", err)
 		}
 	}
 
@@ -149,39 +179,80 @@ func (c *Controller) Stop() error {
 
 func (c *Controller) stopUnsafe() error {
 	cueInterrupted := c.cancelBlinkerLocked()
-
-	if !c.active {
-		if cueInterrupted {
-			if _, err := c.ipc.LPush("scooter:blinker", "off"); err != nil {
-				c.log.Error("failed to turn off blinker", "error", err)
-			}
+	if cueInterrupted {
+		c.pendingBlinkerOff = true
+	}
+	if c.active {
+		c.log.Info("stopping alarm")
+		if c.cancel != nil {
+			c.cancel()
 		}
-		return nil
+		if c.hornDone != nil {
+			<-c.hornDone
+			c.hornDone = nil
+		}
+		c.pendingHornOff = true
+		c.pendingBlinkerOff = true
+		c.pendingInactive = true
+		c.active = false
 	}
+	return c.flushStopLocked()
+}
 
-	c.log.Info("stopping alarm")
+// Pending stop commands stay ordered ahead of any subsequent alarm start.
+func (c *Controller) flushStopLocked() error {
+	var result error
+	if c.pendingHornOff {
+		if err := c.pushOutput("scooter:horn", "off"); err != nil {
+			result = errors.Join(result, fmt.Errorf("turn off horn: %w", err))
+		} else {
+			c.pendingHornOff = false
+		}
+	}
+	if c.pendingBlinkerOff {
+		if err := c.pushOutput("scooter:blinker", "off"); err != nil {
+			result = errors.Join(result, fmt.Errorf("turn off blinker: %w", err))
+		} else {
+			c.pendingBlinkerOff = false
+		}
+	}
+	if c.pendingInactive {
+		if err := c.alarmPub.Set("alarm-active", "false"); err != nil {
+			result = errors.Join(result, fmt.Errorf("publish alarm inactive: %w", err))
+		} else {
+			c.pendingInactive = false
+		}
+	}
+	if result != nil && !c.retrying && !c.closed {
+		c.retrying = true
+		go c.retryStopCommands()
+	}
+	return result
+}
 
-	if c.cancel != nil {
-		c.cancel()
+func (c *Controller) retryStopCommands() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.retryStop:
+			return
+		case <-ticker.C:
+			c.mu.Lock()
+			if c.closed {
+				c.mu.Unlock()
+				return
+			}
+			err := c.flushStopLocked()
+			if err == nil {
+				c.retrying = false
+				c.mu.Unlock()
+				return
+			}
+			c.log.Warn("retrying alarm stop", "error", err)
+			c.mu.Unlock()
+		}
 	}
-	if c.hornDone != nil {
-		<-c.hornDone
-		c.hornDone = nil
-	}
-
-	if _, err := c.ipc.LPush("scooter:horn", "off"); err != nil {
-		c.log.Error("failed to turn off horn", "error", err)
-	}
-	if _, err := c.ipc.LPush("scooter:blinker", "off"); err != nil {
-		c.log.Error("failed to turn off blinker", "error", err)
-	}
-
-	if err := c.alarmPub.Set("alarm-active", "false"); err != nil {
-		c.log.Error("failed to publish alarm-active", "error", err)
-	}
-
-	c.active = false
-	return nil
 }
 
 // cancelBlinkerLocked waits while holding mu; the pattern does not need mu,
@@ -253,6 +324,13 @@ func (c *Controller) BlinkHazards() error {
 		c.mu.Unlock()
 		c.log.Debug("blink hazards skipped: alarm already active")
 		return nil
+	}
+
+	if c.pendingHornOff || c.pendingBlinkerOff || c.pendingInactive {
+		if err := c.flushStopLocked(); err != nil {
+			c.mu.Unlock()
+			return fmt.Errorf("previous alarm has not stopped: %w", err)
+		}
 	}
 
 	c.log.Info("blinking hazards")

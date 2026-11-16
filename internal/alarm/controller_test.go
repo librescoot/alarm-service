@@ -2,8 +2,10 @@ package alarm
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,6 +42,11 @@ func setupTestController(t *testing.T, hornEnabled bool) (*Controller, *ipc.Clie
 		ctx:         ctx,
 		log:         log,
 		active:      false,
+		retryStop:   make(chan struct{}),
+	}
+	c.pushOutput = func(queue, value string) error {
+		_, err := client.LPush(queue, value)
+		return err
 	}
 	c.hornEnabled.Store(hornEnabled)
 
@@ -89,6 +96,49 @@ func TestController_StopCancelsHazardCue(t *testing.T) {
 	last, err := client.Raw().LIndex(context.Background(), "scooter:blinker", 0).Result()
 	if err != nil || last != "off" {
 		t.Fatalf("last blinker command = %q, error = %v; want off", last, err)
+	}
+}
+
+func TestController_RetriesFailedStop(t *testing.T) {
+	c, client := setupTestController(t, true)
+	defer c.Close()
+	if err := c.Start(10 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	var fail atomic.Bool
+	fail.Store(true)
+	c.pushOutput = func(queue, value string) error {
+		if fail.Load() {
+			return errors.New("redis unavailable")
+		}
+		_, err := client.LPush(queue, value)
+		return err
+	}
+	if err := c.Stop(); err == nil {
+		t.Fatal("stop must report failed output commands")
+	}
+	if err := c.Start(time.Second); err == nil {
+		t.Fatal("new alarm must not overtake failed stop commands")
+	}
+	fail.Store(false)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		c.mu.Lock()
+		pending := c.pendingHornOff || c.pendingBlinkerOff || c.pendingInactive
+		c.mu.Unlock()
+		if !pending {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("failed stop commands were not retried")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for _, queue := range []string{"scooter:horn", "scooter:blinker"} {
+		last, err := client.Raw().LIndex(context.Background(), queue, 0).Result()
+		if err != nil || last != "off" {
+			t.Fatalf("last command for %s = %q, error = %v; want off", queue, last, err)
+		}
 	}
 }
 
